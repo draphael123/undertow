@@ -103,6 +103,10 @@
 <script type="module">
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ---------------------------------------------------------------------------
 // UNDERTOW — drift is the whole point. No boost/slipstream. A submarine on
@@ -111,12 +115,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 // All feel-tuning lives in T.
 // ---------------------------------------------------------------------------
 const T = {
-  accel:      64,     // forward throttle
-  reverse:    26,
+  accel:      51,     // forward throttle (~20% slower top speed)
+  reverse:    21,
   drag:       0.5,    // water drag -> top speed
   steerRate:  2.25,   // rad/s the NOSE swings at full steer authority
   turnFloor:  0.40,   // steering authority kept at zero speed (so you can pull away)
-  turnRef:    26,     // speed for full steering authority
+  turnRef:    21,     // speed for full steering authority
   grip:       1.7,    // rad/s the seabed pulls momentum toward the nose. BELOW steerRate => sustained slide
   brakeGrip:  0.55,   // dive-brake: traction breaks, long slide
   brakeSlow:  0.35,   // mild extra drag while braking (tightens hairpins)
@@ -129,15 +133,15 @@ const T = {
   meterFill:  2.2,    // meter charge per (rad-of-drift+0.4) per sec (~1s solid drift = full)
   meterMin:   0.3,    // release below this => no boost
   meterDecay: 0.6,    // meter bleed/sec when you never convert a drift
-  boostKick:  22,     // instant forward impulse when the boost fires (×charge)
-  boostAccel: 62,     // sustained forward thrust during the boost
+  boostKick:  18,     // instant forward impulse when the boost fires (×charge)
+  boostAccel: 50,     // sustained forward thrust during the boost
   boostDur:   1.1,    // boost seconds at full charge
 };
 
 // player-adjustable settings (wired from the settings menu)
 const settings = { steer:1.0, fx:'high', camFx:true };
 
-const HALF = 24;
+const HALF = 31;       // wider paths (was 24) -> less wall-bumping
 const N = 720;
 
 // ---- renderer / scene ----
@@ -154,6 +158,13 @@ const camera = new THREE.PerspectiveCamera(66, 1, 0.5, 4000);
 
 scene.add(new THREE.HemisphereLight(0x3f9fc0, 0x03141a, 1.05));
 const sun = new THREE.DirectionalLight(0x9fe0ff, 0.55); sun.position.set(30,120,10); scene.add(sun); // light filtering from surface
+
+// ---- post: bloom (the underwater neon glow) ----
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth||1280, innerHeight||720), 0.62, 0.55, 0.6); // strength, radius, threshold
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
 
 // ---- caustic texture (canvas) — reused on seabed + road ----
 function causticTex(){
@@ -206,6 +217,14 @@ const PITS = [{a:0.50, b:0.60, side:1}];   // side 1 = +normal edge is the void
 function spanHas(p,frac){ return p.a<p.b ? (frac>=p.a&&frac<=p.b) : (frac>=p.a||frac<=p.b); }
 function pitAt(frac){ for(const p of PITS){ if(spanHas(p,frac)) return p; } return null; }
 function pitOpenAt(frac,side){ const p=pitAt(frac); return !!(p&&p.side===side); }
+
+// CURRENT STREAMS: within a span the water pushes you. 'boost' = along the track (ride it for free speed),
+// 'push' = sideways shove (correct your line or get carried toward the wall).
+const CURRENTS = [
+  {a:0.24, b:0.37, type:'boost', force:30},
+  {a:0.86, b:0.94, type:'push', dir:-1, force:22},
+];
+function currentAt(frac){ for(const cu of CURRENTS){ if(spanHas(cu,frac)) return cu; } return null; }
 
 // road ribbon (with UVs so caustics play across the wet rock)
 {
@@ -341,6 +360,61 @@ function buildSeawall(side){
   scene.add(new THREE.Mesh(g,mat));
 }
 buildSeawall(1); buildSeawall(-1);
+
+// wall CHARACTER — encrusting sea life & ruined fixtures scattered on the seawall
+function wallDecor(){
+  const rock=new THREE.MeshStandardMaterial({color:0x4a5a55,roughness:1});
+  const rust=new THREE.MeshStandardMaterial({color:0x6b3a24,roughness:0.9,metalness:0.3});
+  const coralFan=(cc)=>{ const g=new THREE.Group(); const mat=new THREE.MeshStandardMaterial({color:cc,emissive:cc,emissiveIntensity:0.6,roughness:0.6,side:THREE.DoubleSide});
+    for(let k=0;k<5;k++){ const bl=new THREE.Mesh(new THREE.PlaneGeometry(0.5+Math.random(),2.4+Math.random()*1.5),mat); bl.position.y=1.2; bl.rotation.z=(k-2)*0.32; bl.rotation.x=(Math.random()-.5)*0.3; g.add(bl);} return g; };
+  const anemone=(cc)=>{ const g=new THREE.Group(); const mat=new THREE.MeshBasicMaterial({color:cc});
+    for(let k=0;k<9;k++){ const t=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.2,1.6+Math.random(),5),mat); const a=k/9*7; t.position.set(Math.cos(a)*0.5,0.9,Math.sin(a)*0.5); t.rotation.z=Math.cos(a)*0.5; t.rotation.x=Math.sin(a)*0.5; g.add(t);} return g; };
+  const barnacles=()=>{ const g=new THREE.Group(); for(let k=0;k<7;k++){ const b=new THREE.Mesh(new THREE.ConeGeometry(0.3+Math.random()*0.4,0.5+Math.random()*0.6,6),rock); b.position.set((Math.random()-.5)*2.4,Math.random()*2,(Math.random()-.5)*0.6); b.rotation.x=Math.PI/2; g.add(b);} return g; };
+  const porthole=()=>{ const g=new THREE.Group(); const ring=new THREE.Mesh(new THREE.TorusGeometry(1,0.25,7,14),rust); g.add(ring);
+    const glass=new THREE.Mesh(new THREE.CircleGeometry(0.85,14),new THREE.MeshBasicMaterial({color:0x8ff0ff})); glass.position.z=0.05; g.add(glass); return g; };
+  for(let i=0;i<N;i++){
+    if(wallCull[i] || Math.random()>0.05) continue;              // ~5% of samples get a decoration
+    const side=Math.random()<0.5?1:-1; if(pitOpenAt(i/N,side)) continue;
+    const c=pts[i], n=nrm[i];
+    const wx=c.x+n.x*HALF*side, wz=c.z+n.z*HALF*side;
+    const r=Math.random(); let m;
+    if(r<0.4) m=coralFan(CORAL[i%CORAL.length]);
+    else if(r<0.68) m=anemone(CORAL[(i+2)%CORAL.length]);
+    else if(r<0.88) m=barnacles();
+    else m=porthole();
+    m.position.set(wx, 1.5+Math.random()*4, wz);
+    m.lookAt(c.x, m.position.y, c.z);                            // face inward toward the track
+    scene.add(m);
+  }
+}
+wallDecor();
+
+// ---- current-stream visuals: flowing scrolling streaks over the zone ----
+function streakTex(){
+  const w=64,h=128,cv=document.createElement('canvas');cv.width=w;cv.height=h;const x=cv.getContext('2d');
+  for(let i=0;i<20;i++){ const sx=Math.random()*w, sy=Math.random()*h, len=18+Math.random()*70;
+    const g=x.createLinearGradient(0,sy,0,sy+len);
+    g.addColorStop(0,'rgba(255,255,255,0)');g.addColorStop(.5,'rgba(235,255,250,'+(0.3+Math.random()*0.45)+')');g.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=g; x.fillRect(sx,sy,1.4+Math.random()*2.2,len); }
+  const t=new THREE.CanvasTexture(cv); t.wrapS=t.wrapT=THREE.RepeatWrapping; return t;
+}
+function buildCurrent(cur){
+  const ia=Math.floor(cur.a*N), ib=Math.floor(cur.b*N), W=HALF*0.92;
+  const pos=[],uv=[],idx=[]; const list=[]; for(let i=ia;i<=ib;i++) list.push((i%N+N)%N);
+  for(let t=0;t<list.length;t++){ const j=list[t],c=pts[j],n=nrm[j];
+    pos.push(c.x+n.x*W,0.34,c.z+n.z*W, c.x-n.x*W,0.34,c.z-n.z*W);
+    if(cur.type==='boost') uv.push(0,t*0.4, 1,t*0.4); else uv.push(t*0.4,0, t*0.4,1);
+  }
+  for(let t=0;t<list.length-1;t++){const a=t*2;idx.push(a,a+1,a+2,a+1,a+3,a+2);}
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); g.setIndex(idx);
+  const tx=streakTex();
+  const m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({map:tx,color:cur.type==='boost'?0x6ff0d0:0xff9a5a,
+    transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  m.renderOrder=3; m.frustumCulled=false; scene.add(m); cur._tex=tx;
+}
+CURRENTS.forEach(buildCurrent);
 
 // ---- build the chasm geometry for each pit ----
 function buildPit(p){
@@ -584,13 +658,17 @@ function updateFX(dt){
   const wx=-fz, wz=fx;                                 // right vector
   const fxk=settings.fx==='low'?0.35:1;                // Effects Detail setting scales particles
   const driftAmt=Math.min(1,S.drift/T.maxDrift);
-  if(sp>16 && (driftAmt>0.35 || S.braking)){           // silt from sliding wheels (subtle)
+  if(sp>13 && (driftAmt>0.35 || S.braking)){           // silt from sliding wheels (subtle)
     siltAcc+=dt*(8+26*driftAmt+(S.braking?8:0))*fxk;
     while(siltAcc>=1){siltAcc--; const s=(Math.random()<0.5?1:-1)*2.6; silt.emit(rx+wx*s,0.4,rz+wz*s,1);}
   }
-  if(sp>8){ bubAcc+=dt*(2.5+sp*0.22)*fxk; while(bubAcc>=1){bubAcc--; bubbles.emit(rx,1.5,rz,1);} }
+  if(sp>6){ bubAcc+=dt*(2.5+sp*0.26)*fxk; while(bubAcc>=1){bubAcc--; bubbles.emit(rx,1.5,rz,1);} }
   silt.update(dt); bubbles.update(dt);
   if(kelpWallMat && kelpWallMat.userData.sh) kelpWallMat.userData.sh.uniforms.uTime.value=atmoT;
+  for(const cur of CURRENTS){ if(!cur._tex) continue;              // scroll the flow streaks
+    if(cur.type==='boost') cur._tex.offset.y -= dt*1.4;
+    else cur._tex.offset.x += dt*1.2*(cur.dir||1);
+  }
   updateFish(atmoT);
 }
 
@@ -717,7 +795,7 @@ function step(dt){
   S.drift=Math.abs(dA); S.driftSigned=dA;
   // "drifting" for charge purposes requires active input, so releasing the stick
   // ENDS the drift (fires the boost) and passive wall-scrape never charges the meter
-  const drifting = S.drift>T.driftMin && sp>12 && (steer!==0 || S.braking);
+  const drifting = S.drift>T.driftMin && sp>10 && (steer!==0 || S.braking);
   if(drifting){
     S.meter=Math.min(1, S.meter + (0.4+S.drift)*T.meterFill*dt);
   } else if(S.wasDrift){
@@ -768,6 +846,13 @@ function step(dt){
   }
   // remember the last fully-safe spot (well inside the road, clear of any pit span) for respawn
   if(!pit && Math.abs(off)<HALF-4) S.safeIdx=i;
+
+  // --- current streams push the sub ---
+  const cur=currentAt(frac);
+  if(cur){
+    if(cur.type==='boost'){ S.vx+=tan[i].x*cur.force*dt; S.vz+=tan[i].z*cur.force*dt; }
+    else { S.vx+=n.x*(cur.dir||1)*cur.force*dt; S.vz+=n.z*(cur.dir||1)*cur.force*dt; }
+  }
 
   // --- lap timing --- (frac already computed in the walls+chasm block above)
   if(S.started) S.lapT+=dt;
@@ -853,13 +938,13 @@ function frame(now){
   const steps=Math.max(1,Math.ceil(dt/0.02));
   for(let k=0;k<steps;k++) step(dt/steps);
   updateCam(dt); atmosphere(dt); updateFX(dt); present();
-  renderer.render(scene,camera);
+  if(settings.fx==='low') renderer.render(scene,camera); else composer.render();
   requestAnimationFrame(frame);
 }
 
 function resize(){
   const w=innerWidth||1280, h=innerHeight||720;
-  renderer.setSize(w,h,false);
+  renderer.setSize(w,h,false); composer.setSize(w,h);
   camera.aspect=w/h; camera.updateProjectionMatrix();
 }
 addEventListener('resize',resize); resize();
