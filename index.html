@@ -49,6 +49,11 @@
   .tog span:before{content:'';position:absolute;width:18px;height:18px;left:2px;top:2px;background:#7fe0ff;border-radius:50%;transition:.15s}
   .tog input:checked+span{background:#1f6f8f}.tog input:checked+span:before{transform:translateX(20px);background:#eaffff}
   #settings .backBtn{display:block;margin:22px auto 0}
+  #results{position:fixed;inset:0;z-index:12;display:flex;align-items:center;justify-content:center;
+      background:radial-gradient(130% 100% at 50% 8%,rgba(11,43,58,.8),rgba(2,16,24,.95));padding:24px}
+  #results .rtag{letter-spacing:6px;font-size:12px;opacity:.6;color:#7fe0ff;text-align:center;margin-bottom:2px}
+  #results h2{margin:0 0 20px;letter-spacing:7px;font-weight:800;color:#dff6ff;text-align:center;font-size:42px;text-shadow:0 0 32px #1573a0}
+  #results .rval{font-size:20px;font-weight:700;color:#eaf7ff;font-variant-numeric:tabular-nums}
   .hidden{display:none!important}
   #tag{position:fixed;left:16px;top:12px;font-size:11px;letter-spacing:2px;opacity:.35;z-index:6}
   #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:8}
@@ -91,6 +96,18 @@
     <div class="setrow"><span>Music</span><input id="musicVol" type="range" min="0" max="1" step="0.05" value="0.5"><span id="musicVal" class="val">50%</span></div>
     <div class="setrow"><span>Sound FX</span><input id="sfxVol" type="range" min="0" max="1" step="0.05" value="0.75"><span id="sfxVal" class="val">75%</span></div>
     <button id="backBtn" class="ghost backBtn">◂ BACK</button>
+  </div>
+</div>
+<div id="results" class="hidden">
+  <div class="panel">
+    <div class="rtag">RACE COMPLETE</div>
+    <h2>FINISH</h2>
+    <div class="setrow"><span>TOTAL TIME</span><span id="rTime" class="rval">--</span></div>
+    <div class="setrow"><span>BEST LAP</span><span id="rBest" class="rval">--</span></div>
+    <div class="btnrow" style="justify-content:center">
+      <button id="againBtn">RACE AGAIN ▸</button>
+      <button id="menuBtn" class="ghost">MENU</button>
+    </div>
   </div>
 </div>
 
@@ -208,6 +225,7 @@ const Sound = (()=>{
 
 const HALF = 31;       // wider paths (was 24) -> less wall-bumping
 const N = 720;
+const LAPS = 3;        // race length
 
 // ---- renderer / scene ----
 const canvas = document.getElementById('c');
@@ -715,6 +733,30 @@ function updateFish(t){
   }
 }
 
+// ---- LEVIATHAN: a giant creature slowly cruising the deep overhead ----
+const leviathan=(()=>{
+  const NSEG=15, segs=[];
+  const body=new THREE.MeshStandardMaterial({color:0x24384a,roughness:0.75,emissive:0x0a2634,emissiveIntensity:0.45});
+  const glow=new THREE.MeshBasicMaterial({color:0x6fe0ff});
+  for(let k=0;k<NSEG;k++){
+    const r=(k===0?9:Math.max(1.6,8.5*(1-k/NSEG)));
+    const s=new THREE.Mesh(new THREE.SphereGeometry(r,10,8),body); s.scale.z=1.9;
+    if(k%3===0){ const sp=new THREE.Mesh(new THREE.SphereGeometry(0.8,6,6),glow); sp.position.set(r*0.55,r*0.45,0); s.add(sp);
+                 const sp2=sp.clone(); sp2.position.x=-r*0.55; s.add(sp2); }
+    if(k===0){ const fin=new THREE.Mesh(new THREE.ConeGeometry(6,16,4),body); fin.position.set(0,7,-2); fin.rotation.x=-0.3; s.add(fin); }
+    scene.add(s); segs.push(s);
+  }
+  return {NSEG, segs};
+})();
+function levPath(u){ const a=u*0.08; return new THREE.Vector3(Math.cos(a)*300, 52+Math.sin(a*0.6)*30, Math.sin(a*1.1)*270); }
+function updateLeviathan(t){
+  for(let k=0;k<leviathan.NSEG;k++){
+    const p=levPath(t - k*0.7), ahead=levPath(t - k*0.7 + 0.12);
+    const s=leviathan.segs[k]; s.position.copy(p); s.lookAt(ahead);
+    s.position.y += Math.sin(t*1.3 - k*0.5)*1.5;   // body undulation
+  }
+}
+
 // emit + drive all FX (runs in the render loop, not the fixed physics step)
 function updateFX(dt){
   const sp=Math.hypot(S.vx,S.vz);
@@ -734,14 +776,14 @@ function updateFX(dt){
     if(cur.type==='boost') cur._tex.offset.y -= dt*1.4;
     else cur._tex.offset.x += dt*1.2*(cur.dir||1);
   }
-  updateFish(atmoT);
+  updateFish(atmoT); updateLeviathan(atmoT);
 }
 
 // ---- state ----
 const S = {
   mode:'menu', x:pts[0].x, z:pts[0].z, heading:Math.atan2(tan[0].x,tan[0].z),
   vx:0, vz:0, braking:false,
-  lap:1, checkpoint:false, lapT:0, bestT:0, started:false,
+  lap:1, checkpoint:false, lapT:0, bestT:0, raceT:0, started:false,
   countT:0, drift:0, driftSigned:0, driftShow:0, wheelSpin:0, steerVis:0,
   dead:false, deadT:0, vy:0, y:0, recoverT:0, fade:0, safeIdx:0, spinDead:0,
   meter:0, wasDrift:false, boostT:0, boostPow:0, boostFlash:0,
@@ -749,12 +791,19 @@ const S = {
 };
 function reset(){
   S.x=pts[0].x; S.z=pts[0].z; S.heading=Math.atan2(tan[0].x,tan[0].z);
-  S.vx=S.vz=0; S.braking=false; S.lap=1; S.checkpoint=false; S.lapT=0; S.started=false;
+  S.vx=S.vz=0; S.braking=false; S.lap=1; S.checkpoint=false; S.lapT=0; S.raceT=0; S.started=false;
   S.drift=0; S.driftSigned=0;
   S.dead=false; S.deadT=0; S.vy=0; S.y=0; S.recoverT=0; S.fade=0; S.safeIdx=0; S.spinDead=0;
   S.meter=0; S.wasDrift=false; S.boostT=0; S.boostPow=0; S.boostFlash=0;
 }
 function die(){ if(S.dead) return; S.dead=true; S.deadT=1.5; S.vy=-4; S.spinDead=0; if(el.msg) el.msg.style.opacity=1; Sound.death(); }
+function finish(){
+  S.mode='done';
+  el.rTime.textContent=fmt(S.raceT);
+  el.rBest.textContent=S.bestT?fmt(S.bestT):'--:--';
+  el.results.classList.remove('hidden');
+  Sound.lap();
+}
 function respawn(){
   const i=(S.safeIdx|0);
   S.x=pts[i].x; S.z=pts[i].z; S.heading=Math.atan2(tan[i].x,tan[i].z);
@@ -790,7 +839,8 @@ const el={speed:document.querySelector('#speed .v'),laps:document.querySelector(
   sub:document.querySelector('#laps .s'),drift:document.getElementById('drift'),
   cd:document.getElementById('cd'),hud:document.getElementById('hud'),ov:document.getElementById('ov'),
   fade:document.getElementById('fade'),msg:document.getElementById('msg'),
-  meterfill:document.getElementById('meterfill'),meterwrap:document.getElementById('meterwrap')};
+  meterfill:document.getElementById('meterfill'),meterwrap:document.getElementById('meterwrap'),
+  results:document.getElementById('results'),rTime:document.getElementById('rTime'),rBest:document.getElementById('rBest')};
 function fmt(t){const m=Math.floor(t/60),s=(t%60);return m+':'+s.toFixed(2).padStart(5,'0');}
 
 // ---- start / countdown ----
@@ -818,6 +868,9 @@ musicVol.oninput=()=>{Sound.setVol('music',+musicVol.value);musicVal.textContent
 const sfxVol=document.getElementById('sfxVol'),sfxVal=document.getElementById('sfxVal');
 sfxVol.oninput=()=>{Sound.setVol('sfx',+sfxVol.value);sfxVal.textContent=Math.round(sfxVol.value*100)+'%';};
 function applyFx(){ const low=settings.fx==='low'; rays.visible=!low; snow.visible=!low; }
+// ---- results screen ----
+document.getElementById('againBtn').onclick=()=>{ el.results.classList.add('hidden'); beginDive(); };
+document.getElementById('menuBtn').onclick=()=>{ el.results.classList.add('hidden'); el.hud.classList.add('hidden'); el.ov.classList.remove('hidden'); };
 
 // ---- physics ----
 function step(dt){
@@ -927,12 +980,16 @@ function step(dt){
     else { S.vx+=n.x*(cur.dir||1)*cur.force*dt; S.vz+=n.z*(cur.dir||1)*cur.force*dt; }
   }
 
-  // --- lap timing --- (frac already computed in the walls+chasm block above)
-  if(S.started) S.lapT+=dt;
+  // --- lap timing / finish --- (frac already computed in the walls+chasm block above)
+  if(S.started){ S.lapT+=dt; S.raceT+=dt; }
   if(frac>0.4 && frac<0.6) S.checkpoint=true;
   if(S.checkpoint && i<6){
-    if(!S.started){ S.started=true; S.lapT=0; }
-    else { if(!S.bestT||S.lapT<S.bestT) S.bestT=S.lapT; S.lap++; S.lapT=0; Sound.lap(); }
+    if(!S.started){ S.started=true; S.lapT=0; S.raceT=0; }       // crossing the line starts the clock
+    else {
+      if(!S.bestT||S.lapT<S.bestT) S.bestT=S.lapT;
+      if(S.lap>=LAPS){ finish(); }                                // completed the final lap
+      else { S.lap++; S.lapT=0; Sound.lap(); }
+    }
     S.checkpoint=false;
   }
 
@@ -1003,7 +1060,7 @@ function present(){
 
   el.speed.textContent=Math.round(spd*1.9);
   el.laps.textContent=S.started?fmt(S.lapT):'0:00.00';
-  el.sub.textContent=`LAP ${S.lap} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
+  el.sub.textContent=`LAP ${Math.min(S.lap,LAPS)}/${LAPS} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
   el.meterfill.style.width=(S.meter*100)+'%';
   el.meterwrap.classList.toggle('full',S.meter>=0.999);
   // centre readout: BOOST while surging, else DRIFT / DIVE-BRAKE
