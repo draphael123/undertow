@@ -294,6 +294,7 @@ for(let i=0;i<N;i++){
   const tg=curve.getTangentAt(t); tg.y=0; tg.normalize(); tan.push(tg);
   nrm.push(new THREE.Vector3(-tg.z,0,tg.x));
 }
+let trackLen=0; for(let i=0;i<N;i++) trackLen+=pts[i].distanceTo(pts[(i+1)%N]);
 
 // ---- abyssal pits: within a track span, one side opens onto a bottomless chasm ----
 const PITS = [{a:0.50, b:0.60, side:1}];   // side 1 = +normal edge is the void
@@ -498,6 +499,80 @@ function buildCurrent(cur){
   m.renderOrder=3; m.frustumCulled=false; scene.add(m); cur._tex=tx;
 }
 CURRENTS.forEach(buildCurrent);
+
+// ===================== LEVEL FEATURES =====================
+// --- CAVE / TUNNEL: an enclosing rock arch over a span (headlight + reef-glow only) ---
+const TUNNELS=[{a:0.63,b:0.74}];
+function buildTunnel(sp){
+  const ia=Math.floor(sp.a*N), ib=Math.floor(sp.b*N), RING=8, R=HALF+3, pos=[], idx=[];
+  const list=[]; for(let i=ia;i<=ib;i++) list.push((i%N+N)%N);
+  for(let t=0;t<list.length;t++){ const c=pts[list[t]], n=nrm[list[t]];
+    for(let k=0;k<=RING;k++){ const ang=Math.PI*k/RING, lat=Math.cos(ang)*R, up=Math.sin(ang)*R*0.6+1.5;
+      pos.push(c.x+n.x*lat, up, c.z+n.z*lat); } }
+  const per=RING+1;
+  for(let t=0;t<list.length-1;t++) for(let k=0;k<RING;k++){ const a=t*per+k, b=a+per; idx.push(a,b,a+1, b,b+1,a+1); }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx); g.computeVertexNormals();
+  const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x18232a,roughness:1,emissive:0x081419,emissiveIntensity:0.35,side:THREE.DoubleSide})); m.frustumCulled=false; scene.add(m);
+  for(let t=2;t<list.length-2;t+=3){ const c=pts[list[t]], n=nrm[list[t]], side=(t%2?1:-1);
+    const cr=new THREE.Mesh(new THREE.ConeGeometry(0.7,2.4,5),new THREE.MeshBasicMaterial({color:CORAL[t%CORAL.length]}));
+    cr.position.set(c.x+n.x*(HALF-1)*side, 7+Math.random()*5, c.z+n.z*(HALF-1)*side); cr.rotation.z=Math.PI; scene.add(cr); }
+}
+TUNNELS.forEach(buildTunnel);
+
+// --- KELP-FOREST SLALOM: thick stalks you weave through (soft collision) ---
+const SLALOM={a:0.055,b:0.135}, slalomStalks=[];
+{ const ia=Math.floor(SLALOM.a*N), ib=Math.floor(SLALOM.b*N); let s=1;
+  for(let i=ia;i<=ib;i+=7){ const c=pts[i], n=nrm[i], lat=s*HALF*0.42; s=-s;
+    const x=c.x+n.x*lat, z=c.z+n.z*lat; slalomStalks.push({x,z,r:4.4});
+    const g=new THREE.Group();
+    const trunk=new THREE.Mesh(new THREE.CylinderGeometry(1.3,2,11,7),new THREE.MeshStandardMaterial({color:0x243c30,roughness:1,emissive:0x0a2018,emissiveIntensity:0.3})); trunk.position.y=5.5; g.add(trunk);
+    for(let b2=0;b2<7;b2++){ const H=14+Math.random()*9, bl=new THREE.Mesh(new THREE.PlaneGeometry(2.2,H,1,4),new THREE.MeshStandardMaterial({color:0x1f6b42,emissive:0x0c3a24,emissiveIntensity:0.4,side:THREE.DoubleSide,roughness:1}));
+      bl.position.set((Math.random()-.5)*2,H/2,(Math.random()-.5)*2); bl.rotation.y=Math.random()*3; g.add(bl); }
+    g.position.set(x,0,z); scene.add(g); }
+}
+
+// --- BOOST-RING GATES: drive through to top up the drift meter ---
+const gates=[];
+[0.20,0.33,0.47,0.83,0.96].forEach(f=>{ const i=Math.floor(f*N)%N, c=pts[i], n=nrm[i], t=tan[i], R=HALF*0.72;
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(R,1.3,10,30),new THREE.MeshBasicMaterial({color:0x4fe0ff}));
+  ring.position.set(c.x,T.ride+R*0.5,c.z); ring.rotation.y=Math.atan2(t.x,t.z); scene.add(ring);
+  gates.push({x:c.x,z:c.z,r:R,cd:0,mesh:ring}); });
+function updateGates(dt){
+  for(const gt of gates){ if(gt.cd>0) gt.cd-=dt;
+    gt.mesh.material.color.setHSL(0.5,0.9, gt.cd>0?0.32:0.6+Math.sin(atmoT*3)*0.12);
+    gt.mesh.scale.setScalar(1+(gt.cd>1.4?(gt.cd-1.4)*0.7:0));
+    if(S.mode==='race'&&!S.dead&&gt.cd<=0){ const dx=S.x-gt.x,dz=S.z-gt.z;
+      if(dx*dx+dz*dz<(gt.r*0.85)*(gt.r*0.85)){ S.meter=Math.min(1,S.meter+0.4); gt.cd=1.6; Sound.ready(); } }
+  }
+}
+
+// --- AI OPPONENTS: rail-followers with rubber-banding ---
+const OPP=4, oppColors=[0xff5d73,0x6ee86e,0x9b5de5,0xffd24a], opps=[];
+function makeOppSub(color){
+  const g=new THREE.Group(), hull=new THREE.MeshStandardMaterial({color,roughness:0.5,metalness:0.3});
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(1.9,4.6,5,12),hull); body.rotation.x=Math.PI/2; body.position.y=0.6; g.add(body);
+  const tower=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.6,2.2),hull); tower.position.set(0,1.9,-0.4); g.add(tower);
+  const fin=new THREE.Mesh(new THREE.BoxGeometry(0.35,1.3,1.9),new THREE.MeshStandardMaterial({color:0x243743})); fin.position.set(0,1.7,-3.8); g.add(fin);
+  const eye=new THREE.Mesh(new THREE.SphereGeometry(0.6,8,8),new THREE.MeshBasicMaterial({color:0xfff2c0})); eye.position.set(0,0.6,3.8); g.add(eye);
+  return g;
+}
+for(let o=0;o<OPP;o++){ const g=makeOppSub(oppColors[o]); scene.add(g); opps.push({g,prog:0,lap:1,lat:0,_ph:Math.random()*7}); }
+function resetOpps(){ for(let o=0;o<OPP;o++){ const op=opps[o]; op.prog=(1-(o+1)*0.009+1)%1; op.lap=1; op.lat=(o-(OPP-1)/2)*9;
+  const idx=Math.floor(op.prog*N)%N, c=pts[idx], n=nrm[idx], t=tan[idx]; op.g.position.set(c.x+n.x*op.lat,T.ride,c.z+n.z*op.lat); op.g.rotation.y=Math.atan2(t.x,t.z); } }
+function updateOpps(dt){
+  if(S.mode!=='race') return;
+  const pSpeed=Math.hypot(S.vx,S.vz), pProg=(S.lap-1)+(nearIdx/N);
+  for(const op of opps){
+    const gap=pProg-((op.lap-1)+op.prog), rubber=1+Math.max(-0.18,Math.min(0.28,gap*0.6));
+    op.prog+=((26+pSpeed*0.5)/trackLen)*rubber*dt; if(op.prog>=1){ op.prog-=1; op.lap++; }
+    const idx=Math.floor(op.prog*N)%N, c=pts[idx], n=nrm[idx], t=tan[idx];
+    const targetLat=Math.sin(op.prog*Math.PI*6+op._ph)*(HALF*0.4); op.lat+=(targetLat-op.lat)*Math.min(1,dt*1.5);
+    op.g.position.set(c.x+n.x*op.lat, T.ride+Math.sin(atmoT*1.3+op._ph)*0.2, c.z+n.z*op.lat);
+    op.g.rotation.y=Math.atan2(t.x,t.z); op.g.rotation.z=Math.cos(op.prog*Math.PI*6+op._ph)*0.15;
+    const dx=S.x-op.g.position.x, dz=S.z-op.g.position.z, d=Math.hypot(dx,dz);
+    if(d<6 && !S.dead){ const push=(6-d), nx=dx/(d||1), nz=dz/(d||1); S.x+=nx*push; S.z+=nz*push; S.vx*=0.93; S.vz*=0.93; S.wallHitImp=Math.max(S.wallHitImp||0,0.3); }
+  }
+}
 
 // ---- build the chasm geometry for each pit ----
 function buildPit(p){
@@ -776,7 +851,7 @@ function updateFX(dt){
     if(cur.type==='boost') cur._tex.offset.y -= dt*1.4;
     else cur._tex.offset.x += dt*1.2*(cur.dir||1);
   }
-  updateFish(atmoT); updateLeviathan(atmoT);
+  updateFish(atmoT); updateLeviathan(atmoT);   // opponents + gates run in step() (fixed timestep)
 }
 
 // ---- state ----
@@ -795,6 +870,7 @@ function reset(){
   S.drift=0; S.driftSigned=0;
   S.dead=false; S.deadT=0; S.vy=0; S.y=0; S.recoverT=0; S.fade=0; S.safeIdx=0; S.spinDead=0;
   S.meter=0; S.wasDrift=false; S.boostT=0; S.boostPow=0; S.boostFlash=0;
+  if(typeof resetOpps==='function') resetOpps();
 }
 function die(){ if(S.dead) return; S.dead=true; S.deadT=1.5; S.vy=-4; S.spinDead=0; if(el.msg) el.msg.style.opacity=1; Sound.death(); }
 function finish(){
@@ -980,6 +1056,14 @@ function step(dt){
     else { S.vx+=n.x*(cur.dir||1)*cur.force*dt; S.vz+=n.z*(cur.dir||1)*cur.force*dt; }
   }
 
+  // --- kelp-forest slalom: soft collision with the stalks ---
+  if(frac>=SLALOM.a && frac<=SLALOM.b){
+    for(const st of slalomStalks){ const dx=S.x-st.x, dz=S.z-st.z, d=Math.hypot(dx,dz);
+      if(d<st.r+2.5){ const push=(st.r+2.5-d), nx=dx/(d||1), nz=dz/(d||1); S.x+=nx*push; S.z+=nz*push;
+        const vn=S.vx*nx+S.vz*nz; if(vn<0){ S.vx-=nx*vn*1.2; S.vz-=nz*vn*1.2; } S.vx*=0.9; S.vz*=0.9;
+        S.wallHitImp=Math.max(S.wallHitImp,0.35); } }
+  }
+
   // --- lap timing / finish --- (frac already computed in the walls+chasm block above)
   if(S.started){ S.lapT+=dt; S.raceT+=dt; }
   if(frac>0.4 && frac<0.6) S.checkpoint=true;
@@ -992,6 +1076,9 @@ function step(dt){
     }
     S.checkpoint=false;
   }
+
+  // --- AI opponents + boost-ring gates (gameplay -> fixed timestep) ---
+  updateOpps(dt); updateGates(dt);
 
   // wheel spin accumulator (visual)
   S.wheelSpin += (S.vx*fx+S.vz*fz)*dt*0.6;
@@ -1060,7 +1147,8 @@ function present(){
 
   el.speed.textContent=Math.round(spd*1.9);
   el.laps.textContent=S.started?fmt(S.lapT):'0:00.00';
-  el.sub.textContent=`LAP ${Math.min(S.lap,LAPS)}/${LAPS} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
+  let ahead=0; const pProg=(S.lap-1)+(nearIdx/N); for(const op of opps){ if((op.lap-1)+op.prog>pProg) ahead++; }
+  el.sub.textContent=`LAP ${Math.min(S.lap,LAPS)}/${LAPS} · P${ahead+1}/${OPP+1} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
   el.meterfill.style.width=(S.meter*100)+'%';
   el.meterwrap.classList.toggle('full',S.meter>=0.999);
   // centre readout: BOOST while surging, else DRIFT / DIVE-BRAKE
@@ -1095,7 +1183,8 @@ window.__dbg={
   S,T,
   go(){beginDive();},
   place(frac){const i=Math.floor(frac*N)%N;S.x=pts[i].x;S.z=pts[i].z;S.heading=Math.atan2(tan[i].x,tan[i].z);S.vx=S.vz=0;nearIdx=i;},
-  state(){return {mode:S.mode,speed:+Math.hypot(S.vx,S.vz).toFixed(1),driftDeg:+(S.drift*57.3).toFixed(0),brake:S.braking,meter:+S.meter.toFixed(2),boostT:+S.boostT.toFixed(2),dead:S.dead,fade:+(S.fade||0).toFixed(2),safeIdx:S.safeIdx,lap:S.lap,off:+((S.x-pts[nearIdx].x)*nrm[nearIdx].x+(S.z-pts[nearIdx].z)*nrm[nearIdx].z).toFixed(1)};},
+  state(){const pProg=(S.lap-1)+(nearIdx/N); let ahead=0; for(const op of opps){ if((op.lap-1)+op.prog>pProg) ahead++; }
+    return {mode:S.mode,speed:+Math.hypot(S.vx,S.vz).toFixed(1),driftDeg:+(S.drift*57.3).toFixed(0),brake:S.braking,meter:+S.meter.toFixed(2),boostT:+S.boostT.toFixed(2),dead:S.dead,fade:+(S.fade||0).toFixed(2),lap:S.lap,place:ahead+1,oppLead:+Math.max(...opps.map(o=>(o.lap-1)+o.prog)).toFixed(3),off:+((S.x-pts[nearIdx].x)*nrm[nearIdx].x+(S.z-pts[nearIdx].z)*nrm[nearIdx].z).toFixed(1)};},
   kill(){S.mode='race';die();},
   // teleport into the pit span and shove toward the open edge, to test the fall+respawn
   toPit(){const p=PITS[0], f=(p.a+p.b)/2, i=Math.floor(f*N)%N, n=nrm[i];
