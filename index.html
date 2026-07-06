@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Undertow</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#02121a;font-family:"Segoe UI",system-ui,sans-serif;color:#cfe8f2;user-select:none}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block;outline:none}
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:5}
+  .box{position:absolute;background:rgba(6,24,32,.5);border:1px solid rgba(90,180,210,.22);border-radius:8px;padding:8px 12px;backdrop-filter:blur(3px)}
+  #speed{left:16px;bottom:18px;min-width:150px}
+  #speed .v{font-size:34px;font-weight:700;line-height:1;color:#eaf7ff}
+  #speed .u{font-size:12px;opacity:.6;letter-spacing:2px}
+  #laps{right:16px;top:14px;text-align:right}
+  #laps .t{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;color:#eaf7ff}
+  #laps .s{font-size:12px;opacity:.65}
+  #meterlbl{left:16px;bottom:96px;padding:0;background:none;border:none;font-size:11px;letter-spacing:3px;opacity:.7}
+  #meterwrap{left:16px;bottom:78px;width:220px;height:14px;padding:0;border-radius:7px;overflow:hidden}
+  #meterfill{height:100%;width:0%;background:linear-gradient(90deg,#1f6f8f,#4fd9ff)}
+  #meterwrap.full{box-shadow:0 0 16px #4fd9ff;border-color:#8ff0ff}
+  #meterwrap.full #meterfill{background:linear-gradient(90deg,#4fd9ff,#8ff0ff,#fff)}
+  #drift{left:50%;top:20%;transform:translateX(-50%);font-size:30px;font-weight:800;letter-spacing:5px;color:#6fe6ff;opacity:0;text-shadow:0 0 18px #2bb6ff;transition:opacity .1s;white-space:nowrap}
+  #cd{left:50%;top:38%;transform:translate(-50%,-50%);font-size:88px;font-weight:800;color:#eaf7ff;opacity:0;text-shadow:0 0 34px #1e88aa}
+  #ov{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;flex-direction:column;
+      background:radial-gradient(130% 100% at 50% 8%,rgba(11,43,58,.7),rgba(2,16,24,.92));text-align:center;padding:24px}
+  #ov .tagline{letter-spacing:6px;font-size:12px;opacity:.6;color:#7fe0ff;margin-bottom:2px}
+  #ov h1{font-size:58px;margin:0;letter-spacing:10px;font-weight:800;color:#dff6ff;text-shadow:0 0 34px #1573a0}
+  #ov p{opacity:.72;max-width:450px;line-height:1.55;font-size:14px}
+  #ov .keys{font-size:13px;opacity:.85;margin-top:4px;line-height:1.9}
+  #ov kbd{display:inline-block;min-width:20px;padding:2px 8px;margin:0 2px;border-radius:5px;background:#0e2c3d;border:1px solid #2b6a86;font-family:inherit}
+  .btnrow{display:flex;gap:14px;margin-top:24px;align-items:center}
+  #ov button,#settings button{pointer-events:auto;cursor:pointer;font:600 17px/1 inherit;letter-spacing:3px;color:#03151d;
+     background:linear-gradient(90deg,#4fd9ff,#8ff0ff);border:none;padding:14px 38px;border-radius:30px;box-shadow:0 0 24px #2bb6ff}
+  button.ghost{background:none!important;border:1px solid #4fd9ff!important;color:#bfefff!important;box-shadow:none!important;padding:13px 30px!important}
+  #settings{position:fixed;inset:0;z-index:11;display:flex;align-items:center;justify-content:center;
+      background:radial-gradient(130% 100% at 50% 8%,rgba(11,43,58,.72),rgba(2,16,24,.93));padding:24px}
+  #settings .panel{background:rgba(6,24,32,.72);border:1px solid rgba(90,180,210,.3);border-radius:16px;padding:26px 30px 24px;min-width:360px;backdrop-filter:blur(5px)}
+  #settings h2{margin:0 0 20px;letter-spacing:5px;font-weight:800;color:#dff6ff;text-align:center}
+  .setrow{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:18px 0;font-size:14px}
+  .setrow .val{width:44px;text-align:right;opacity:.85;font-variant-numeric:tabular-nums}
+  .seg button{background:#0e2c3d;border:1px solid #2b6a86;color:#9fd0de;padding:6px 15px;cursor:pointer;font:inherit;font-size:13px;box-shadow:none;letter-spacing:1px}
+  .seg button.on{background:#4fd9ff;color:#03151d;font-weight:700}
+  .seg button:first-child{border-radius:7px 0 0 7px}.seg button:last-child{border-radius:0 7px 7px 0}
+  input[type=range]{accent-color:#4fd9ff;width:150px}
+  .tog{position:relative;display:inline-block;width:44px;height:24px}
+  .tog input{opacity:0;width:0;height:0}
+  .tog span{position:absolute;inset:0;background:#0e2430;border:1px solid #2b6a86;border-radius:13px;cursor:pointer;transition:.15s}
+  .tog span:before{content:'';position:absolute;width:18px;height:18px;left:2px;top:2px;background:#7fe0ff;border-radius:50%;transition:.15s}
+  .tog input:checked+span{background:#1f6f8f}.tog input:checked+span:before{transform:translateX(20px);background:#eaffff}
+  #settings .backBtn{display:block;margin:22px auto 0}
+  .hidden{display:none!important}
+  #tag{position:fixed;left:16px;top:12px;font-size:11px;letter-spacing:2px;opacity:.35;z-index:6}
+  #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:8}
+  #msg{position:fixed;left:50%;top:42%;transform:translate(-50%,-50%);z-index:9;font-size:30px;font-weight:800;
+       letter-spacing:4px;color:#ff6a5a;text-shadow:0 0 22px #ff2a1a;opacity:0;pointer-events:none;transition:opacity .15s;white-space:nowrap}
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<div id="tag">UNDERTOW · SESSION 0</div>
+<div id="hud" class="hidden">
+  <div id="speed" class="box"><div class="v">0</div><div class="u">KN</div></div>
+  <div id="laps" class="box"><div class="t">0:00.00</div><div class="s">LAP 1 · BEST --:--</div></div>
+  <div id="meterlbl" class="box">DRIFT CHARGE</div>
+  <div id="meterwrap" class="box"><div id="meterfill"></div></div>
+  <div id="drift">DRIFT</div>
+  <div id="cd"></div>
+</div>
+<div id="fade"></div>
+<div id="msg">LOST TO THE DEEP</div>
+<div id="ov">
+  <div class="tagline">◆ DEEP-SEA DRIFT RACER ◆</div>
+  <h1>UNDERTOW</h1>
+  <p>A submarine-on-wheels drift racer on the seabed. The rock is slick — you're <b>always sliding</b>. Steer into the slide, hold a <b>drift</b> to charge the meter, and release for a <b>boost</b>. Mind the chasm.</p>
+  <div class="keys">
+    <div><kbd>W</kbd>/<kbd>↑</kbd> throttle &nbsp; <kbd>S</kbd>/<kbd>↓</kbd> reverse &nbsp; <kbd>A</kbd> <kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer</div>
+    <div><kbd>Shift</kbd> dive-brake (drift) &nbsp; <kbd>R</kbd> reset</div>
+  </div>
+  <div class="btnrow">
+    <button id="start">DIVE ▸</button>
+    <button id="settingsBtn" class="ghost">SETTINGS</button>
+  </div>
+</div>
+<div id="settings" class="hidden">
+  <div class="panel">
+    <h2>SETTINGS</h2>
+    <div class="setrow"><span>Steering Sensitivity</span><input id="sense" type="range" min="0.6" max="1.6" step="0.05" value="1"><span id="senseVal" class="val">1.00</span></div>
+    <div class="setrow"><span>Effects Detail</span><div class="seg" id="fxSeg"><button data-v="high" class="on">HIGH</button><button data-v="low">LOW</button></div></div>
+    <div class="setrow"><span>Camera Motion</span><label class="tog"><input id="camfx" type="checkbox" checked><span></span></label></div>
+    <button id="backBtn" class="ghost backBtn">◂ BACK</button>
+  </div>
+</div>
+
+<script>window.addEventListener('error',e=>{window.__err=(e.error&&e.error.stack)||e.message;});</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ---------------------------------------------------------------------------
+// UNDERTOW — drift is the whole point. No boost/slipstream. A submarine on
+// wheels slides across a slick seabed; skill is controlling the constant slide.
+// Space = dive-brake (break traction to initiate/tighten a drift).
+// All feel-tuning lives in T.
+// ---------------------------------------------------------------------------
+const T = {
+  accel:      64,     // forward throttle
+  reverse:    26,
+  drag:       0.5,    // water drag -> top speed
+  steerRate:  2.25,   // rad/s the NOSE swings at full steer authority
+  turnFloor:  0.40,   // steering authority kept at zero speed (so you can pull away)
+  turnRef:    26,     // speed for full steering authority
+  grip:       1.7,    // rad/s the seabed pulls momentum toward the nose. BELOW steerRate => sustained slide
+  brakeGrip:  0.55,   // dive-brake: traction breaks, long slide
+  brakeSlow:  0.35,   // mild extra drag while braking (tightens hairpins)
+  maxDrift:   0.62,   // rad (~35°): slide caps here -> controllable, never a broadside
+  driftMin:   0.16,   // rad (~9°) before the DRIFT readout lights
+  wallBounce: 0.2,
+  wallScrub:  0.82,   // speed kept on a HARD perpendicular wall hit
+  ride:       1.7,    // body-centre height above the seabed (wheels reach down to it)
+  // --- drift meter -> mini-turbo boost (the reward for drifting) ---
+  meterFill:  2.2,    // meter charge per (rad-of-drift+0.4) per sec (~1s solid drift = full)
+  meterMin:   0.3,    // release below this => no boost
+  meterDecay: 0.6,    // meter bleed/sec when you never convert a drift
+  boostKick:  22,     // instant forward impulse when the boost fires (×charge)
+  boostAccel: 62,     // sustained forward thrust during the boost
+  boostDur:   1.1,    // boost seconds at full charge
+};
+
+// player-adjustable settings (wired from the settings menu)
+const settings = { steer:1.0, fx:'high', camFx:true };
+
+const HALF = 24;
+const N = 720;
+
+// ---- renderer / scene ----
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled = false;
+const scene = new THREE.Scene();
+const DEEP = 0x03202b;
+scene.background = new THREE.Color(DEEP);
+scene.fog = new THREE.FogExp2(DEEP, 0.0072);          // murk: limited visibility = underwater + draw-distance
+
+const camera = new THREE.PerspectiveCamera(66, 1, 0.5, 4000);
+
+scene.add(new THREE.HemisphereLight(0x3f9fc0, 0x03141a, 1.05));
+const sun = new THREE.DirectionalLight(0x9fe0ff, 0.55); sun.position.set(30,120,10); scene.add(sun); // light filtering from surface
+
+// ---- caustic texture (canvas) — reused on seabed + road ----
+function causticTex(){
+  const s=256, cv=document.createElement('canvas'); cv.width=cv.height=s;
+  const x=cv.getContext('2d');
+  x.fillStyle='#06232e'; x.fillRect(0,0,s,s);
+  for(let i=0;i<46;i++){
+    const cx=Math.random()*s, cy=Math.random()*s, r=16+Math.random()*46;
+    const g=x.createRadialGradient(cx,cy,0,cx,cy,r);
+    g.addColorStop(0,'rgba(150,240,255,0.55)');
+    g.addColorStop(0.55,'rgba(60,160,200,0.12)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    x.fillStyle=g; x.beginPath(); x.arc(cx,cy,r,0,7); x.fill();
+  }
+  const t=new THREE.CanvasTexture(cv); t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  return t;
+}
+const caustic = causticTex();
+
+// ---- seabed floor (big plane under the track, caustics shimmering) ----
+{
+  const c2=caustic.clone(); c2.wrapS=c2.wrapT=THREE.RepeatWrapping; c2.repeat.set(60,60);
+  const floor=new THREE.Mesh(
+    new THREE.PlaneGeometry(6000,6000),
+    new THREE.MeshStandardMaterial({color:0x061c25, emissive:0x18596e, emissiveMap:c2, emissiveIntensity:0.85, roughness:1, metalness:0})
+  );
+  floor.rotation.x=-Math.PI/2; floor.position.y=-2.2;
+  floor.userData.caustic=c2;
+  scene.add(floor); scene.userData.floor=floor;
+}
+
+// ---- track ----
+const CP = [
+  [0,0],[220,20],[360,140],[330,340],[150,430],[-90,410],[-250,300],
+  [-330,120],[-250,-120],[-40,-160],[140,-120],[220,-260],[60,-420],
+  [-180,-430],[-360,-300],[-380,-60],
+].map(p=>new THREE.Vector3(p[0]*1.05,0,p[1]*1.05));
+const curve = new THREE.CatmullRomCurve3(CP, true, 'catmullrom', 0.5);
+
+const pts=[], tan=[], nrm=[];
+for(let i=0;i<N;i++){
+  const t=i/N;
+  pts.push(curve.getPointAt(t));
+  const tg=curve.getTangentAt(t); tg.y=0; tg.normalize(); tan.push(tg);
+  nrm.push(new THREE.Vector3(-tg.z,0,tg.x));
+}
+
+// ---- abyssal pits: within a track span, one side opens onto a bottomless chasm ----
+const PITS = [{a:0.50, b:0.60, side:1}];   // side 1 = +normal edge is the void
+function spanHas(p,frac){ return p.a<p.b ? (frac>=p.a&&frac<=p.b) : (frac>=p.a||frac<=p.b); }
+function pitAt(frac){ for(const p of PITS){ if(spanHas(p,frac)) return p; } return null; }
+function pitOpenAt(frac,side){ const p=pitAt(frac); return !!(p&&p.side===side); }
+
+// road ribbon (with UVs so caustics play across the wet rock)
+{
+  const g=new THREE.BufferGeometry(), pos=[], uv=[], idx=[];
+  for(let i=0;i<=N;i++){
+    const j=i%N, c=pts[j], n=nrm[j];
+    pos.push(c.x+n.x*HALF,0.02,c.z+n.z*HALF, c.x-n.x*HALF,0.02,c.z-n.z*HALF);
+    uv.push(0,i/12, 1,i/12);
+  }
+  for(let i=0;i<N;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(idx); g.computeVertexNormals();
+  const rc=caustic.clone(); rc.wrapS=rc.wrapT=THREE.RepeatWrapping; rc.repeat.set(2,1);
+  const roadMat=new THREE.MeshStandardMaterial({color:0x123039, emissive:0x0d3543, emissiveMap:rc, emissiveIntensity:0.5, roughness:0.55, metalness:0.1});
+  const road=new THREE.Mesh(g,roadMat); scene.add(road); scene.userData.roadCaustic=rc;
+}
+// edge + centre lines (speed perception)
+function lineStrip(off,color,y){
+  const g=new THREE.BufferGeometry(),p=[];
+  for(let i=0;i<=N;i++){const j=i%N,c=pts[j],n=nrm[j];p.push(c.x+n.x*off,y,c.z+n.z*off);}
+  g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
+  return new THREE.Line(g,new THREE.LineBasicMaterial({color}));
+}
+scene.add(lineStrip(0,0x2f6f86,0.16));
+scene.add(lineStrip(HALF-1,0x53c6e6,0.16));
+scene.add(lineStrip(-(HALF-1),0x53c6e6,0.16));
+{ // dashed centre chevrons
+  const g=new THREE.BufferGeometry(),p=[];
+  for(let i=0;i<N;i+=6){const c=pts[i],t=tan[i];p.push(c.x-t.x*4,0.22,c.z-t.z*4,c.x+t.x*4,0.22,c.z+t.z*4);}
+  g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
+  scene.add(new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x5fd2ee})));
+}
+// coral palette — the game's color language (used by walls, spires, wrecks, arch)
+const CORAL=[0xff5d73,0xff9a3d,0xffd24a,0x9b5de5,0x2fd6c4,0x4ea8ff,0xff7ac0,0x6ee86e];
+function minTrackDist(x,z){ let m=1e18; for(let i=0;i<N;i+=3){const dx=x-pts[i].x,dz=z-pts[i].z,d=dx*dx+dz*dz; if(d<m)m=d;} return Math.sqrt(m); }
+
+// self-overlap cull: where the loop passes near ANOTHER part of itself, a wall would
+// cross the far road (no collision there -> you drive through it). Skip walls at those samples.
+const wallCull=new Array(N).fill(false);
+for(let i=0;i<N;i++){
+  const ci=pts[i];
+  for(let j=0;j<N;j++){
+    let dind=Math.abs(i-j); dind=Math.min(dind,N-dind);
+    if(dind<70) continue;                                   // same stretch/corner -> ignore
+    const dx=ci.x-pts[j].x, dz=ci.z-pts[j].z;
+    if(dx*dx+dz*dz < (HALF*2.7)*(HALF*2.7)){ wallCull[i]=true; break; }
+  }
+}
+
+// walls = tall swaying KELP curtains along both edges (collision stays at ±HALF; kelp is the visual)
+const KELPCOL=[0x1f6b42,0x2c8a55,0x15665a,0x3a9a5e,0x1a5e6e,0x267a4d];
+let kelpWallMat=null;
+{
+  const geos=[]; const tmp=new THREE.Color();
+  const proto=new THREE.PlaneGeometry(1.7,1,1,5);           // narrow blade, scaled to height per strand
+  for(const side of [1,-1]){
+    for(let i=0;i<N;i++){
+      if(wallCull[i] || pitOpenAt(i/N,side)) continue;
+      const c=pts[i], n=nrm[i];
+      // 1–2 blades per sample, jittered along the edge so they read as separate fronds with gaps
+      const blades=1+(Math.random()<0.5?1:0);
+      for(let b2=0;b2<blades;b2++){
+        const jit=(Math.random()-.5)*5.0;
+        const ex=c.x+(n.x*HALF*side)+n.x*jit, ez=c.z+(n.z*HALF*side)+n.z*jit;
+        const H=6+Math.random()*16;                          // ragged heights
+        const g=proto.clone();
+        g.scale(0.7+Math.random()*0.7, H, 1); g.translate(0,H/2,0);
+        const m=new THREE.Matrix4().makeRotationY(Math.random()*Math.PI); m.setPosition(ex,0,ez);
+        g.applyMatrix4(m);
+        const cnt=g.attributes.position.count, uv=g.attributes.uv;
+        const ph=new Float32Array(cnt).fill(Math.random()*7); g.setAttribute('aPhase',new THREE.BufferAttribute(ph,1));
+        const base=KELPCOL[(i+b2+ (side>0?0:3))%KELPCOL.length], coralTip=Math.random()<0.16;
+        const col=new Float32Array(cnt*3);
+        for(let v=0;v<cnt;v++){
+          const h=uv.getY(v);
+          tmp.set(coralTip && h>0.62 ? CORAL[i%CORAL.length] : base);
+          const br=0.18+h*0.8;
+          col[v*3]=tmp.r*br; col[v*3+1]=tmp.g*br; col[v*3+2]=tmp.b*br;
+        }
+        g.setAttribute('color',new THREE.BufferAttribute(col,3));
+        geos.push(g);
+      }
+    }
+  }
+  const merged=mergeGeometries(geos);
+  kelpWallMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.9,side:THREE.DoubleSide});  // opaque = no transparency overdraw (perf)
+  kelpWallMat.onBeforeCompile=(sh)=>{
+    sh.uniforms.uTime={value:0}; kelpWallMat.userData.sh=sh;
+    sh.vertexShader='attribute float aPhase;uniform float uTime;\n'+sh.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n float kh=uv.y;\n transformed.x+=sin(uTime*1.25+aPhase+kh*2.6)*kh*2.6;\n transformed.z+=cos(uTime*0.85+aPhase)*kh*1.3;');
+    sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',
+      '#include <emissivemap_fragment>\n totalEmissiveRadiance += vColor*vColor*0.22;');
+  };
+  const km=new THREE.Mesh(merged,kelpWallMat); km.frustumCulled=false; scene.add(km);
+}
+
+// ---- build the chasm geometry for each pit ----
+function buildPit(p){
+  const ia=Math.floor(p.a*N), ib=Math.floor(p.b*N), s=p.side;
+  const face=[],fidx=[], rim=[], cover=[],cidx=[];
+  const list=[]; for(let i=ia;i<=ib;i++) list.push(((i%N)+N)%N);
+  for(let k=0;k<list.length;k++){
+    const j=list[k], c=pts[j], n=nrm[j];
+    const ex=c.x+n.x*HALF*s, ez=c.z+n.z*HALF*s;                 // road edge on the open side
+    face.push(ex,0.2,ez, ex,-90,ez);                            // cliff face plunging into the dark
+    rim.push(ex,0.4,ez);
+    const ox=c.x+n.x*(HALF+160)*s, oz=c.z+n.z*(HALF+160)*s;
+    cover.push(ex,-1.6,ez, ox,-1.6,oz);                         // near-black cover hides the bright seabed = void
+  }
+  for(let k=0;k<list.length-1;k++){const a=k*2; fidx.push(a,a+1,a+2,a+1,a+3,a+2); cidx.push(a,a+1,a+2,a+1,a+3,a+2);}
+  const mesh=(arr,ix,mat)=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(arr,3));g.setIndex(ix);g.computeVertexNormals();const m=new THREE.Mesh(g,mat);m.frustumCulled=false;scene.add(m);};
+  mesh(face,fidx,new THREE.MeshStandardMaterial({color:0x02090d,roughness:1,side:THREE.DoubleSide}));
+  mesh(cover,cidx,new THREE.MeshBasicMaterial({color:0x01060a,side:THREE.DoubleSide}));
+  const rg=new THREE.BufferGeometry(); rg.setAttribute('position',new THREE.Float32BufferAttribute(rim,3));
+  scene.add(new THREE.Line(rg,new THREE.LineBasicMaterial({color:0xff7a4a})));   // amber danger rim
+}
+PITS.forEach(buildPit);
+// start gate
+{
+  const c=pts[0],n=nrm[0];
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(HALF*2,6),new THREE.MeshBasicMaterial({color:0x9fe8ff,transparent:true,opacity:0.32}));
+  m.rotation.x=-Math.PI/2; m.position.set(c.x,0.28,c.z);
+  m.lookAt(c.x+tan[0].x,0.28,c.z+tan[0].z); m.rotateX(-Math.PI/2);
+  scene.add(m);
+}
+
+// ===================== LANDMARKS & SCENERY =====================
+// glowing coral spire (stacked tapered segments, luminous tip)
+function coralSpire(x,z,col,h){
+  const g=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0.45,roughness:0.7});
+  let px=0,pz=0,py=0,r=2.2+Math.random()*1.6, segs=4+Math.floor(Math.random()*4);
+  for(let s=0;s<segs;s++){
+    const sh=h/segs*1.25, seg=new THREE.Mesh(new THREE.CylinderGeometry(r*0.62,r,sh,7),mat);
+    seg.position.set(px,py+sh/2,pz); seg.rotation.y=Math.random()*3; g.add(seg);
+    py+=sh*0.82; px+=(Math.random()-.5)*2.4; pz+=(Math.random()-.5)*2.4; r*=0.8;
+  }
+  const tip=new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.8,r*1.2),8,8),new THREE.MeshBasicMaterial({color:col}));
+  tip.position.set(px,py+1,pz); g.add(tip);
+  g.position.set(x,0,z); scene.add(g);
+}
+{ let placed=0,tries=0;
+  while(placed<18 && tries<600){ tries++;
+    const ang=Math.random()*Math.PI*2, rad=130+Math.random()*430;
+    const x=Math.cos(ang)*rad, z=Math.sin(ang)*rad;
+    if(minTrackDist(x,z) < HALF+20) continue;
+    coralSpire(x,z,CORAL[placed%CORAL.length],14+Math.random()*32); placed++;
+  }
+}
+// sunken shipwreck landmark
+function shipwreck(x,z,yaw){
+  const g=new THREE.Group();
+  const dark=new THREE.MeshStandardMaterial({color:0x2c241d,roughness:1,metalness:0.15,emissive:0x0a1518,emissiveIntensity:0.3});
+  const hull=new THREE.Mesh(new THREE.CylinderGeometry(9,6.5,54,10,1,true),dark);
+  hull.rotation.z=Math.PI/2; hull.rotation.x=0.12; hull.position.y=6.5; g.add(hull);
+  const bow=new THREE.Mesh(new THREE.ConeGeometry(6.5,20,10),dark); bow.rotation.z=-Math.PI/2; bow.position.set(34,6.5,0); g.add(bow);
+  for(const mx of [-10,10]){ const mast=new THREE.Mesh(new THREE.CylinderGeometry(0.9,0.9,34,6),dark); mast.position.set(mx,18,0); mast.rotation.z=0.32; g.add(mast); }
+  for(let i=0;i<8;i++){ const cc=CORAL[i%CORAL.length]; const b=new THREE.Mesh(new THREE.SphereGeometry(1.4+Math.random(),8,8),new THREE.MeshBasicMaterial({color:cc})); b.position.set((Math.random()-.5)*46,3+Math.random()*12,(Math.random()-.5)*15); g.add(b);} // coral encrusting the wreck
+  g.position.set(x,0,z); g.rotation.y=yaw; g.scale.setScalar(1.5); scene.add(g);
+}
+for(let t=0;t<300;t++){ const ang=Math.random()*7,rad=170+Math.random()*260,x=Math.cos(ang)*rad,z=Math.sin(ang)*rad;
+  if(minTrackDist(x,z)>HALF+42){ shipwreck(x,z,Math.random()*7); break; } }
+
+// ancient stone ARCHWAY the track drives under (setpiece landmark)
+function archOverTrack(frac){
+  const i=Math.floor(frac*N)%N, c=pts[i], n=nrm[i];
+  const stone=new THREE.MeshStandardMaterial({color:0x3a4952,emissive:0x123038,emissiveIntensity:0.35,roughness:1});
+  const R=HALF+7;
+  const span=new THREE.Mesh(new THREE.TorusGeometry(R,4.5,8,20,Math.PI),stone);
+  span.position.set(c.x,0.5,c.z); span.rotation.y=Math.atan2(n.x,n.z); scene.add(span);
+  for(let k=0;k<11;k++){ const a=Math.PI*k/10, cc=CORAL[k%CORAL.length];
+    const b=new THREE.Mesh(new THREE.SphereGeometry(1.5,8,8),new THREE.MeshBasicMaterial({color:cc}));
+    b.position.set(c.x+n.x*Math.cos(a)*R, 0.5+Math.sin(a)*R, c.z+n.z*Math.cos(a)*R); scene.add(b); }
+}
+archOverTrack(0.16); archOverTrack(0.80);
+
+// distant bioluminescent silhouettes for depth (giant faint jelly-domes)
+for(let i=0;i<7;i++){
+  const ang=Math.random()*7, rad=520+Math.random()*420, cc=CORAL[i%CORAL.length];
+  const m=new THREE.Mesh(new THREE.SphereGeometry(30+Math.random()*40,10,8,0,7,0,1.4),
+    new THREE.MeshBasicMaterial({color:cc,transparent:true,opacity:0.10,depthWrite:false}));
+  m.position.set(Math.cos(ang)*rad,40+Math.random()*70,Math.sin(ang)*rad); scene.add(m);
+}
+
+// ---- god-rays (follow camera so they're always overhead) ----
+const rays=new THREE.Group();
+for(let i=0;i<6;i++){
+  const w=18+Math.random()*22;
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,320),
+    new THREE.MeshBasicMaterial({color:0x8fe6ff,transparent:true,opacity:0.05,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));
+  m.position.set((Math.random()-.5)*260,150,(Math.random()-.5)*260);
+  m.rotation.z=(Math.random()-.5)*0.5; m.rotation.y=Math.random()*Math.PI;
+  m.userData.ph=Math.random()*7;
+  rays.add(m);
+}
+scene.add(rays);
+
+// ---- marine snow (soft round drifting detritus, not white blocks) ----
+function softDot(){
+  const s=64,cv=document.createElement('canvas');cv.width=cv.height=s;const x=cv.getContext('2d');
+  const g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(0.45,'rgba(210,235,245,0.35)');g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g;x.fillRect(0,0,s,s);return new THREE.CanvasTexture(cv);
+}
+const SNOW=360;
+const snow=(()=>{
+  const g=new THREE.BufferGeometry(),p=new Float32Array(SNOW*3);
+  for(let i=0;i<SNOW;i++){p[i*3]=(Math.random()-.5)*520;p[i*3+1]=Math.random()*90;p[i*3+2]=(Math.random()-.5)*520;}
+  g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  const m=new THREE.Points(g,new THREE.PointsMaterial({map:softDot(),color:0xd6ecf4,size:1.7,transparent:true,opacity:0.3,depthWrite:false,sizeAttenuation:true}));
+  scene.add(m); return m;
+})();
+
+// ---- vehicle: submarine on wheels ----
+const sub = new THREE.Group();
+const steerWheels=[]; const allWheels=[];
+{
+  const hull=new THREE.MeshStandardMaterial({color:0xffb347,roughness:0.45,metalness:0.35}); // warm yellow so it pops in blue
+  const dark=new THREE.MeshStandardMaterial({color:0x243743,roughness:0.6,metalness:0.4});
+  // body = capsule lying along Z
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(2.1,5.2,6,14),hull);
+  body.rotation.x=Math.PI/2; body.position.y=0.2;
+  // conning tower
+  const tower=new THREE.Mesh(new THREE.BoxGeometry(1.8,1.9,2.6),hull); tower.position.set(0,1.7,-0.4);
+  const fin=new THREE.Mesh(new THREE.BoxGeometry(0.4,1.5,2.2),dark); fin.position.set(0,1.6,-4.3);
+  // porthole eye (front)
+  const eye=new THREE.Mesh(new THREE.SphereGeometry(0.9,14,12),new THREE.MeshStandardMaterial({color:0xfff2c0,emissive:0xffd66a,emissiveIntensity:0.9,roughness:0.3}));
+  eye.position.set(0,0.3,4.4);
+  // propeller
+  const hubM=new THREE.MeshStandardMaterial({color:0x9fb4bf,metalness:0.6,roughness:0.4});
+  const prop=new THREE.Group();
+  for(let b=0;b<4;b++){const bl=new THREE.Mesh(new THREE.BoxGeometry(0.3,2.4,0.7),hubM);bl.rotation.z=b*Math.PI/2;prop.add(bl);}
+  prop.position.set(0,0.2,-5.4); sub.userData.prop=prop;
+  // wheels
+  const tireM=new THREE.MeshStandardMaterial({color:0x14202a,roughness:0.85});
+  const wheelGeo=new THREE.CylinderGeometry(1.15,1.15,0.9,16);
+  const WX=2.5, WZ=3.0, WY=-1.15;
+  [[ -WX,WY, WZ,true],[WX,WY,WZ,true],[-WX,WY,-WZ,false],[WX,WY,-WZ,false]].forEach(([x,y,z,front])=>{
+    const w=new THREE.Mesh(wheelGeo,tireM); w.rotation.z=Math.PI/2; w.position.set(x,y,z);
+    const pivot=new THREE.Group(); pivot.position.set(x,y,z); w.position.set(0,0,0);
+    pivot.add(w); sub.add(pivot);
+    allWheels.push(w); if(front) steerWheels.push(pivot);
+  });
+  sub.add(body,tower,fin,eye,prop);
+}
+scene.add(sub);
+// headlight cutting through the murk
+const beam=new THREE.SpotLight(0xdff4ff,3.4,150,0.5,0.5,1.2);
+beam.position.set(0,1.2,3); const beamTarget=new THREE.Object3D(); beamTarget.position.set(0,0,40);
+sub.add(beam,beamTarget); beam.target=beamTarget;
+// visible beam cone
+const cone=new THREE.Mesh(new THREE.ConeGeometry(9,44,20,1,true),
+  new THREE.MeshBasicMaterial({color:0xbfeeff,transparent:true,opacity:0.03,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));
+cone.rotation.x=-Math.PI/2; cone.position.set(0,0.8,24); sub.add(cone);
+
+// ===================== UNDERWATER FX =====================
+// pooled soft-point particle system (reused for silt + bubbles)
+function particleSystem(count,{color,size,blend,rise,drag,ttl,spread,opacity}){
+  const g=new THREE.BufferGeometry();
+  const pos=new Float32Array(count*3), life=new Float32Array(count), sz=new Float32Array(count);
+  const vel=new Float32Array(count*3);
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setAttribute('aLife',new THREE.BufferAttribute(life,1));
+  g.setAttribute('aSize',new THREE.BufferAttribute(sz,1));
+  const mat=new THREE.ShaderMaterial({
+    uniforms:{uColor:{value:new THREE.Color(color)},uOpacity:{value:opacity}},
+    transparent:true, depthWrite:false, blending:blend,
+    vertexShader:`attribute float aLife;attribute float aSize;varying float vL;
+      void main(){vL=aLife;vec4 mv=modelViewMatrix*vec4(position,1.0);
+      gl_PointSize=aSize*(300.0/-mv.z)*clamp(aLife+0.15,0.0,1.0);gl_Position=projectionMatrix*mv;}`,
+    fragmentShader:`uniform vec3 uColor;uniform float uOpacity;varying float vL;
+      void main(){if(vL<=0.0)discard;vec2 d=gl_PointCoord-0.5;float r=dot(d,d);
+      if(r>0.25)discard;gl_FragColor=vec4(uColor,(1.0-r*4.0)*vL*uOpacity);}`,
+  });
+  const p=new THREE.Points(g,mat); p.frustumCulled=false; scene.add(p);
+  let head=0;
+  return {
+    emit(x,y,z,n){
+      for(let k=0;k<n;k++){
+        const i=head; head=(head+1)%count;
+        pos[i*3]=x+(Math.random()-.5)*spread; pos[i*3+1]=y; pos[i*3+2]=z+(Math.random()-.5)*spread;
+        vel[i*3]=(Math.random()-.5)*spread*1.4; vel[i*3+1]=rise*(0.5+Math.random()); vel[i*3+2]=(Math.random()-.5)*spread*1.4;
+        life[i]=1; sz[i]=size*(0.7+Math.random()*0.6);
+      }
+    },
+    update(dt){
+      for(let i=0;i<count;i++){
+        if(life[i]<=0) continue;
+        life[i]-=dt/ttl;
+        const k=Math.exp(-drag*dt); vel[i*3]*=k; vel[i*3+2]*=k;
+        pos[i*3]+=vel[i*3]*dt; pos[i*3+1]+=vel[i*3+1]*dt; pos[i*3+2]+=vel[i*3+2]*dt;
+      }
+      g.attributes.position.needsUpdate=true; g.attributes.aLife.needsUpdate=true; g.attributes.aSize.needsUpdate=true;
+    }
+  };
+}
+const silt   = particleSystem(200,{color:0xa89066,size:11,blend:THREE.NormalBlending,  rise:1.1,drag:2.6,ttl:0.85,spread:1.7,opacity:0.28});
+const bubbles= particleSystem(180,{color:0xbfe6f5,size:5, blend:THREE.AdditiveBlending,rise:8,  drag:1.1,ttl:1.3,spread:1.0,opacity:0.3});
+let siltAcc=0, bubAcc=0;
+
+// ambient fish drifting through the murk in slow arcs
+const fish=[];
+{
+  const bodyGeo=new THREE.SphereGeometry(1,10,8); bodyGeo.scale(1,0.7,2.2);
+  const tailGeo=new THREE.ConeGeometry(0.85,1.5,8);
+  const cols=[0x6fb6c9,0xffd27a,0xe98a6b,0x8fe6c0,0xc79be6];
+  for(let i=0;i<11;i++){
+    const grp=new THREE.Group();
+    const mat=new THREE.MeshStandardMaterial({color:cols[i%cols.length],emissive:cols[i%cols.length],emissiveIntensity:0.16,roughness:0.6});
+    const b=new THREE.Mesh(bodyGeo,mat);
+    const t=new THREE.Mesh(tailGeo,mat); t.rotation.x=-Math.PI/2; t.position.z=-2.5;
+    grp.add(b,t); grp.scale.setScalar(0.7+Math.random()*1.7);
+    const ci=Math.floor(Math.random()*N), c=pts[ci];
+    grp.userData={cx:c.x+(Math.random()-.5)*180, cz:c.z+(Math.random()-.5)*180,
+      rx:24+Math.random()*70, rz:24+Math.random()*70, y:5+Math.random()*34,
+      spd:0.15+Math.random()*0.4, ph:Math.random()*7, tail:t};
+    scene.add(grp); fish.push(grp);
+  }
+}
+function updateFish(t){
+  for(const f of fish){
+    const u=f.userData, a=t*u.spd+u.ph;
+    const x=u.cx+Math.cos(a)*u.rx, z=u.cz+Math.sin(a)*u.rz;
+    const nx=u.cx+Math.cos(a+0.05)*u.rx, nz=u.cz+Math.sin(a+0.05)*u.rz;
+    f.position.set(x,u.y+Math.sin(t*0.8+u.ph)*1.6,z);
+    f.rotation.y=Math.atan2(nx-x,nz-z);
+    u.tail.rotation.y=Math.sin(t*8+u.ph)*0.4;
+  }
+}
+
+// emit + drive all FX (runs in the render loop, not the fixed physics step)
+function updateFX(dt){
+  const sp=Math.hypot(S.vx,S.vz);
+  const fx=Math.sin(S.heading), fz=Math.cos(S.heading);
+  const rx=S.x-fx*5.2, rz=S.z-fz*5.2;                 // behind the sub
+  const wx=-fz, wz=fx;                                 // right vector
+  const fxk=settings.fx==='low'?0.35:1;                // Effects Detail setting scales particles
+  const driftAmt=Math.min(1,S.drift/T.maxDrift);
+  if(sp>16 && (driftAmt>0.35 || S.braking)){           // silt from sliding wheels (subtle)
+    siltAcc+=dt*(8+26*driftAmt+(S.braking?8:0))*fxk;
+    while(siltAcc>=1){siltAcc--; const s=(Math.random()<0.5?1:-1)*2.6; silt.emit(rx+wx*s,0.4,rz+wz*s,1);}
+  }
+  if(sp>8){ bubAcc+=dt*(2.5+sp*0.22)*fxk; while(bubAcc>=1){bubAcc--; bubbles.emit(rx,1.5,rz,1);} }
+  silt.update(dt); bubbles.update(dt);
+  if(kelpWallMat && kelpWallMat.userData.sh) kelpWallMat.userData.sh.uniforms.uTime.value=atmoT;
+  updateFish(atmoT);
+}
+
+// ---- state ----
+const S = {
+  mode:'menu', x:pts[0].x, z:pts[0].z, heading:Math.atan2(tan[0].x,tan[0].z),
+  vx:0, vz:0, braking:false,
+  lap:1, checkpoint:false, lapT:0, bestT:0, started:false,
+  countT:0, drift:0, driftSigned:0, driftShow:0, wheelSpin:0, steerVis:0,
+  dead:false, deadT:0, vy:0, y:0, recoverT:0, fade:0, safeIdx:0, spinDead:0,
+  meter:0, wasDrift:false, boostT:0, boostPow:0, boostFlash:0,
+};
+function reset(){
+  S.x=pts[0].x; S.z=pts[0].z; S.heading=Math.atan2(tan[0].x,tan[0].z);
+  S.vx=S.vz=0; S.braking=false; S.lap=1; S.checkpoint=false; S.lapT=0; S.started=false;
+  S.drift=0; S.driftSigned=0;
+  S.dead=false; S.deadT=0; S.vy=0; S.y=0; S.recoverT=0; S.fade=0; S.safeIdx=0; S.spinDead=0;
+  S.meter=0; S.wasDrift=false; S.boostT=0; S.boostPow=0; S.boostFlash=0;
+}
+function die(){ if(S.dead) return; S.dead=true; S.deadT=1.5; S.vy=-4; S.spinDead=0; if(el.msg) el.msg.style.opacity=1; }
+function respawn(){
+  const i=(S.safeIdx|0);
+  S.x=pts[i].x; S.z=pts[i].z; S.heading=Math.atan2(tan[i].x,tan[i].z);
+  S.vx=S.vz=0; S.y=0; S.vy=0; S.dead=false; S.recoverT=0.5; nearIdx=i;
+  if(el.msg) el.msg.style.opacity=0;
+}
+
+// ---- input ----
+const keys={};
+addEventListener('keydown',e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))e.preventDefault();
+  keys[e.key.toLowerCase()]=true;
+  if(e.key.toLowerCase()==='r') reset();
+});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false;}); // don't get stuck-on keys
+const K=(...a)=>a.some(k=>keys[k]);
+
+// ---- lap / progress ----
+let nearIdx=0;
+function nearestIdx(x,z){
+  let best=nearIdx,bd=1e18;
+  for(let d=-40;d<=40;d++){
+    const i=((nearIdx+d)%N+N)%N;
+    const dx=x-pts[i].x, dz=z-pts[i].z, dd=dx*dx+dz*dz;
+    if(dd<bd){bd=dd;best=i;}
+  }
+  nearIdx=best; return best;
+}
+
+// ---- HUD ----
+const el={speed:document.querySelector('#speed .v'),laps:document.querySelector('#laps .t'),
+  sub:document.querySelector('#laps .s'),drift:document.getElementById('drift'),
+  cd:document.getElementById('cd'),hud:document.getElementById('hud'),ov:document.getElementById('ov'),
+  fade:document.getElementById('fade'),msg:document.getElementById('msg'),
+  meterfill:document.getElementById('meterfill'),meterwrap:document.getElementById('meterwrap')};
+function fmt(t){const m=Math.floor(t/60),s=(t%60);return m+':'+s.toFixed(2).padStart(5,'0');}
+
+// ---- start / countdown ----
+function beginDive(){
+  el.ov.classList.add('hidden'); el.hud.classList.remove('hidden');
+  reset(); S.mode='count'; S.countT=3.2;      // snappy 3·2·1·GO
+  try{window.focus();canvas.focus();}catch(e){}
+}
+document.getElementById('start').onclick=beginDive;
+canvas.addEventListener('pointerdown',()=>{try{window.focus();canvas.focus();}catch(e){}});
+
+// ---- settings menu ----
+const settingsEl=document.getElementById('settings');
+document.getElementById('settingsBtn').onclick=()=>{el.ov.classList.add('hidden');settingsEl.classList.remove('hidden');};
+document.getElementById('backBtn').onclick=()=>{settingsEl.classList.add('hidden');el.ov.classList.remove('hidden');};
+const senseEl=document.getElementById('sense'),senseVal=document.getElementById('senseVal');
+senseEl.oninput=()=>{settings.steer=+senseEl.value;senseVal.textContent=(+senseEl.value).toFixed(2);};
+document.querySelectorAll('#fxSeg button').forEach(b=>b.onclick=()=>{
+  settings.fx=b.dataset.v; document.querySelectorAll('#fxSeg button').forEach(x=>x.classList.toggle('on',x===b)); applyFx();
+});
+document.getElementById('camfx').onchange=e=>{settings.camFx=e.target.checked;};
+function applyFx(){ const low=settings.fx==='low'; rays.visible=!low; snow.visible=!low; }
+
+// ---- physics ----
+function step(dt){
+  if(S.mode==='count'){
+    S.countT-=dt;
+    el.cd.style.opacity=1;
+    el.cd.textContent = S.countT>0.2 ? Math.ceil(S.countT) : 'GO';
+    if(S.countT<=-0.5){S.mode='race'; el.cd.style.opacity=0;}
+    return;
+  }
+  if(S.mode!=='race') return;
+
+  // --- death: sink into the abyss, fade to black, respawn at last safe spot ---
+  if(S.dead){
+    S.deadT-=dt; S.vy-=28*dt; S.y+=S.vy*dt; S.spinDead+=dt*7;
+    S.fade=Math.min(1,(1.5-S.deadT)/0.5);
+    if(S.deadT<=0) respawn();
+    return;
+  }
+  if(S.recoverT>0){ S.recoverT-=dt; S.fade=Math.max(0,S.recoverT/0.5); }
+
+  const speed=Math.hypot(S.vx,S.vz);
+  // --- steering ---
+  const steer=(K('a','arrowleft')?1:0)-(K('d','arrowright')?1:0);
+  const auth=T.turnFloor+(1-T.turnFloor)*Math.min(1,speed/T.turnRef);
+  S.heading += steer*T.steerRate*settings.steer*auth*dt;
+  S.steerVis += (steer*0.5 - S.steerVis)*Math.min(1,dt*10);   // visual wheel angle
+
+  const fx=Math.sin(S.heading), fz=Math.cos(S.heading);
+  const thr=(K('w','arrowup')?1:0)-(K('s','arrowdown')?1:0);
+  S.braking = K('shift');
+
+  // --- CORE: velocity-preserving redirection. Seabed pulls momentum toward
+  //     the nose at `grip` rad/s; dive-brake drops grip so the tail breaks free. ---
+  let sp=Math.hypot(S.vx,S.vz);
+  let velAng = sp>0.01 ? Math.atan2(S.vx,S.vz) : S.heading;
+  let dA=S.heading-velAng; while(dA>Math.PI)dA-=2*Math.PI; while(dA<-Math.PI)dA+=2*Math.PI;
+  if(Math.abs(dA)>T.maxDrift){ S.heading=velAng+Math.sign(dA)*T.maxDrift; dA=Math.sign(dA)*T.maxDrift; }
+  const gr=(S.braking?T.brakeGrip:T.grip)*dt;
+  velAng += Math.max(-gr,Math.min(gr,dA));
+  S.vx=Math.sin(velAng)*sp; S.vz=Math.cos(velAng)*sp;
+
+  // --- drift meter -> mini-turbo: charge while drifting, fire a boost on release ---
+  S.drift=Math.abs(dA); S.driftSigned=dA;
+  // "drifting" for charge purposes requires active input, so releasing the stick
+  // ENDS the drift (fires the boost) and passive wall-scrape never charges the meter
+  const drifting = S.drift>T.driftMin && sp>12 && (steer!==0 || S.braking);
+  if(drifting){
+    S.meter=Math.min(1, S.meter + (0.4+S.drift)*T.meterFill*dt);
+  } else if(S.wasDrift){
+    if(S.meter>=T.meterMin){                              // cash the charge into a boost
+      S.boostPow=S.meter; S.boostT=T.boostDur*(0.55+0.75*S.meter);
+      S.vx+=fx*T.boostKick*S.meter; S.vz+=fz*T.boostKick*S.meter;  // instant pop
+      S.boostFlash=1;
+    }
+    S.meter=0;
+  } else {
+    S.meter=Math.max(0, S.meter-T.meterDecay*dt);
+  }
+  S.wasDrift=drifting;
+  if(S.boostT>0) S.boostT-=dt; S.boostFlash=Math.max(0,S.boostFlash-dt*2);
+
+  // --- throttle along heading (+ active boost) ---
+  const acc=(thr>0?T.accel:thr<0?-T.reverse:0) + (S.boostT>0?T.boostAccel:0);
+  S.vx+=fx*acc*dt; S.vz+=fz*acc*dt;
+
+  // --- drag (+ dive-brake slow). Boost surge comes from thrust/kick, not drag ---
+  const dragK=Math.exp(-(T.drag+(S.braking?T.brakeSlow:0))*dt);
+  S.vx*=dragK; S.vz*=dragK;
+
+  S.x+=S.vx*dt; S.z+=S.vz*dt;
+
+  // --- drift readout flag ---
+  if(drifting) S.driftShow=Math.min(1,S.driftShow+dt*5);
+  else S.driftShow=Math.max(0,S.driftShow-dt*4);
+
+  // --- walls + chasm ---
+  const i=nearestIdx(S.x,S.z), c=pts[i], n=nrm[i];
+  const off=(S.x-c.x)*n.x+(S.z-c.z)*n.z;
+  const frac=i/N;
+  const pit=pitAt(frac);
+  const overVoid = pit && Math.sign(off)===pit.side;      // this edge is the open chasm
+  if(overVoid && Math.abs(off)>HALF-1){
+    die();                                                 // slid over the ledge -> lost to the deep
+  } else if(Math.abs(off)>HALF-2 && !overVoid){
+    const side=Math.sign(off);
+    const push=(HALF-2)-Math.abs(off);
+    S.x+=n.x*push*side; S.z+=n.z*push*side;
+    const vn=S.vx*n.x+S.vz*n.z;
+    if(vn*side>0){
+      S.vx-=n.x*vn*(1+T.wallBounce); S.vz-=n.z*vn*(1+T.wallBounce);
+      const imp=Math.min(1,Math.abs(vn)/40);
+      S.vx*=1-(1-T.wallScrub)*imp; S.vz*=1-(1-T.wallScrub)*imp;
+    }
+  }
+  // remember the last fully-safe spot (well inside the road, clear of any pit span) for respawn
+  if(!pit && Math.abs(off)<HALF-4) S.safeIdx=i;
+
+  // --- lap timing --- (frac already computed in the walls+chasm block above)
+  if(S.started) S.lapT+=dt;
+  if(frac>0.4 && frac<0.6) S.checkpoint=true;
+  if(S.checkpoint && i<6){
+    if(!S.started){ S.started=true; S.lapT=0; }
+    else { if(!S.bestT||S.lapT<S.bestT) S.bestT=S.lapT; S.lap++; S.lapT=0; }
+    S.checkpoint=false;
+  }
+
+  // wheel spin accumulator (visual)
+  S.wheelSpin += (S.vx*fx+S.vz*fz)*dt*0.6;
+}
+
+// ---- camera: follow TRAVEL direction so the drift is visible ----
+let camYaw=S.heading;
+function updateCam(dt){
+  const speed=Math.hypot(S.vx,S.vz);
+  const travel = speed>6 ? Math.atan2(S.vx,S.vz) : S.heading;
+  let d=travel-camYaw; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+  camYaw+=d*Math.min(1,dt*4);
+  const back=16+speed*0.18, h=7.5;
+  const cx=S.x-Math.sin(camYaw)*back, cz=S.z-Math.cos(camYaw)*back;
+  camera.position.lerp(new THREE.Vector3(cx,h,cz),Math.min(1,dt*6));
+  camera.lookAt(S.x+Math.sin(camYaw)*10, T.ride+1.2, S.z+Math.cos(camYaw)*10);
+  camera.fov = 66 + (settings.camFx ? speed*0.06+(S.braking?4:0)+(S.boostT>0?9:0) : 0);   // boost/speed FOV (toggleable)
+  camera.updateProjectionMatrix();
+}
+
+// ---- ambient animation (caustics, rays, snow) ----
+let atmoT=0;
+function atmosphere(dt){
+  atmoT+=dt;
+  const f=scene.userData.floor; if(f){const c=f.userData.caustic;c.offset.x=Math.sin(atmoT*0.03)*0.1;c.offset.y=atmoT*0.012;}
+  const rc=scene.userData.roadCaustic; if(rc){rc.offset.y=-atmoT*0.05;}
+  rays.position.set(camera.position.x,0,camera.position.z);
+  rays.children.forEach(m=>{m.material.opacity=0.04+0.03*(0.5+0.5*Math.sin(atmoT*0.6+m.userData.ph));});
+  // marine snow drifts down + sideways, wraps, recentres on camera
+  const p=snow.geometry.attributes.position; const cx=camera.position.x, cz=camera.position.z;
+  for(let i=0;i<SNOW;i++){
+    let y=p.getY(i)-dt*6;
+    if(y<0){y=90; p.setX(i,cx+(Math.random()-.5)*520); p.setZ(i,cz+(Math.random()-.5)*520);}
+    p.setY(i,y);
+  }
+  p.needsUpdate=true;
+}
+
+// ---- render sub + HUD ----
+function present(){
+  const bob=Math.sin(atmoT*1.3)*0.14;                       // buoyant rise/fall
+  sub.position.set(S.x,T.ride+bob+(S.y||0),S.z);
+  if(S.dead){                                               // tumble as it sinks into the dark
+    sub.rotation.y=S.heading+S.spinDead;
+    sub.rotation.z=Math.sin(S.spinDead)*0.6;
+    sub.rotation.x=-0.5+Math.cos(S.spinDead*0.7)*0.3;
+  } else {
+    sub.rotation.y=S.heading;
+    sub.rotation.z=Math.max(-0.5,Math.min(0.5,-(S.driftSigned||0)*0.5)) + Math.sin(atmoT*0.9)*0.03; // bank + gentle sway
+    sub.rotation.x=Math.sin(atmoT*1.1)*0.025;               // subtle pitch bob
+  }
+  el.fade.style.opacity=S.fade||0;
+  if(sub.userData.prop) sub.userData.prop.rotation.z += (0.2+Math.hypot(S.vx,S.vz)*0.02);
+  steerWheels.forEach(pv=>pv.rotation.y=S.steerVis);
+  allWheels.forEach(w=>w.rotation.x=S.wheelSpin);
+
+  el.speed.textContent=Math.round(Math.hypot(S.vx,S.vz)*1.9);
+  el.laps.textContent=S.started?fmt(S.lapT):'0:00.00';
+  el.sub.textContent=`LAP ${S.lap} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
+  el.meterfill.style.width=(S.meter*100)+'%';
+  el.meterwrap.classList.toggle('full',S.meter>=0.999);
+  // centre readout: BOOST while surging, else DRIFT / DIVE-BRAKE
+  const showBoost=S.boostT>0;
+  el.drift.style.opacity=showBoost?1:S.driftShow;
+  el.drift.textContent=showBoost?'BOOST!':(S.braking?'DIVE-BRAKE':'DRIFT');
+  el.drift.style.color=showBoost?'#8ff0ff':'#6fe6ff';
+}
+
+// ---- loop ----
+let last=performance.now();
+function frame(now){
+  let dt=(now-last)/1000; last=now;
+  dt=Math.min(dt,0.05);
+  const steps=Math.max(1,Math.ceil(dt/0.02));
+  for(let k=0;k<steps;k++) step(dt/steps);
+  updateCam(dt); atmosphere(dt); updateFX(dt); present();
+  renderer.render(scene,camera);
+  requestAnimationFrame(frame);
+}
+
+function resize(){
+  const w=innerWidth||1280, h=innerHeight||720;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+addEventListener('resize',resize); resize();
+requestAnimationFrame(frame);
+
+// ---- debug hooks ----
+window.__dbg={
+  S,T,
+  go(){beginDive();},
+  place(frac){const i=Math.floor(frac*N)%N;S.x=pts[i].x;S.z=pts[i].z;S.heading=Math.atan2(tan[i].x,tan[i].z);S.vx=S.vz=0;nearIdx=i;},
+  state(){return {mode:S.mode,speed:+Math.hypot(S.vx,S.vz).toFixed(1),driftDeg:+(S.drift*57.3).toFixed(0),brake:S.braking,meter:+S.meter.toFixed(2),boostT:+S.boostT.toFixed(2),dead:S.dead,fade:+(S.fade||0).toFixed(2),safeIdx:S.safeIdx,lap:S.lap,off:+((S.x-pts[nearIdx].x)*nrm[nearIdx].x+(S.z-pts[nearIdx].z)*nrm[nearIdx].z).toFixed(1)};},
+  kill(){S.mode='race';die();},
+  // teleport into the pit span and shove toward the open edge, to test the fall+respawn
+  toPit(){const p=PITS[0], f=(p.a+p.b)/2, i=Math.floor(f*N)%N, n=nrm[i];
+    S.mode='race'; this.place(f); S.safeIdx=Math.floor((p.a-0.03)*N)%N;
+    S.vx=n.x*p.side*46+Math.sin(S.heading)*18; S.vz=n.z*p.side*46+Math.cos(S.heading)*18;},
+  // sim(): forces race mode, steps physics at fixed 60Hz (immune to rAF throttle)
+  sim(frames,inp){
+    S.mode='race'; if(!S.started){S.started=true;S.lapT=0;}
+    for(const k of ['w','s','a','d','arrowup','arrowdown','arrowleft','arrowright',' ','shift']) keys[k]=false;
+    if(inp) for(const k of inp) keys[k]=true;
+    const out=[];
+    for(let f=0;f<frames;f++){ step(1/60); if(f%20===19) out.push({f:f+1,...this.state()}); }
+    return out;
+  },
+  // tick(): steps the REAL path (respects menu/count/race) so we can verify the countdown->move flow
+  tick(frames,inp){
+    if(inp!==undefined){for(const k of ['w','s','a','d','arrowup','arrowdown','arrowleft','arrowright',' ','shift'])keys[k]=false; if(inp)for(const k of inp)keys[k]=true;}
+    for(let f=0;f<frames;f++) step(1/60);
+    return this.state();
+  },
+};
+</script>
+</body>
+</html>
