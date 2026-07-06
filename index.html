@@ -304,6 +304,44 @@ let kelpWallMat=null;
   const km=new THREE.Mesh(merged,kelpWallMat); km.frustumCulled=false; scene.add(km);
 }
 
+// solid WATER-DAMAGED seawall behind the kelp (gives a clear boundary the kelp overgrows)
+function stoneTex(){
+  const s=256,cv=document.createElement('canvas');cv.width=cv.height=s;const x=cv.getContext('2d');
+  x.fillStyle='#39463f'; x.fillRect(0,0,s,s);                              // weathered concrete base
+  x.strokeStyle='rgba(0,0,0,0.34)'; x.lineWidth=2;                         // block courses
+  for(let y=0;y<s;y+=34){ x.beginPath();x.moveTo(0,y);x.lineTo(s,y);x.stroke();
+    const off=((y/34)|0)%2?24:0; for(let bx=off;bx<=s;bx+=48){x.beginPath();x.moveTo(bx,y);x.lineTo(bx,y+34);x.stroke();} }
+  for(let i=0;i<26;i++){ const wx=Math.random()*s,w=4+Math.random()*16;    // dark water-stain streaks
+    const g=x.createLinearGradient(wx,0,wx+w,0);
+    g.addColorStop(0,'rgba(8,18,15,0)');g.addColorStop(.5,'rgba(7,15,12,0.45)');g.addColorStop(1,'rgba(8,18,15,0)');
+    x.fillStyle=g;x.fillRect(wx,Math.random()*s*0.35,w,s); }
+  for(let i=0;i<46;i++){ const ax=Math.random()*s,ay=Math.random()*s,r=6+Math.random()*22; // algae blotches
+    const g=x.createRadialGradient(ax,ay,0,ax,ay,r);
+    g.addColorStop(0,'rgba(58,120,68,0.5)');g.addColorStop(1,'rgba(58,120,68,0)');
+    x.fillStyle=g;x.beginPath();x.arc(ax,ay,r,0,7);x.fill(); }
+  x.strokeStyle='rgba(0,0,0,0.5)';x.lineWidth=1.4;                          // cracks
+  for(let i=0;i<11;i++){ let cx=Math.random()*s,cy=Math.random()*s;x.beginPath();x.moveTo(cx,cy);
+    for(let k=0;k<6;k++){cx+=(Math.random()-.5)*44;cy+=(Math.random()-.5)*44;x.lineTo(cx,cy);}x.stroke(); }
+  const t=new THREE.CanvasTexture(cv); t.wrapS=t.wrapT=THREE.RepeatWrapping; return t;
+}
+const stone=stoneTex();
+function buildSeawall(side){
+  const g=new THREE.BufferGeometry(),pos=[],uv=[],idx=[];
+  for(let i=0;i<=N;i++){
+    const j=i%N,c=pts[j],n=nrm[j];const off=HALF*side;
+    const bx=c.x+n.x*off, bz=c.z+n.z*off;
+    const H=7.5+2.6*(0.5+0.5*Math.sin(i*0.19+side*1.7));                    // uneven, ruined top
+    pos.push(bx,-1.5,bz, bx,H,bz); uv.push(i/6,0, i/6,1);
+  }
+  for(let i=0;i<N;i++){ if(wallCull[i]||pitOpenAt(i/N,side)) continue; const a=i*2;idx.push(a,a+1,a+2,a+1,a+3,a+2);}
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(idx); g.computeVertexNormals();
+  const mat=new THREE.MeshStandardMaterial({map:stone,emissiveMap:stone,emissive:0x0d221d,emissiveIntensity:0.5,color:0x8fa39c,roughness:0.96,metalness:0.04,side:THREE.DoubleSide});
+  scene.add(new THREE.Mesh(g,mat));
+}
+buildSeawall(1); buildSeawall(-1);
+
 // ---- build the chasm geometry for each pit ----
 function buildPit(p){
   const ia=Math.floor(p.a*N), ib=Math.floor(p.b*N), s=p.side;
@@ -614,7 +652,7 @@ function fmt(t){const m=Math.floor(t/60),s=(t%60);return m+':'+s.toFixed(2).padS
 // ---- start / countdown ----
 function beginDive(){
   el.ov.classList.add('hidden'); el.hud.classList.remove('hidden');
-  reset(); S.mode='count'; S.countT=3.2;      // snappy 3·2·1·GO
+  reset(); S.mode='count'; S.countT=2.99;      // 3·2·1·GO
   try{window.focus();canvas.focus();}catch(e){}
 }
 document.getElementById('start').onclick=beginDive;
@@ -637,8 +675,10 @@ function step(dt){
   if(S.mode==='count'){
     S.countT-=dt;
     el.cd.style.opacity=1;
-    el.cd.textContent = S.countT>0.2 ? Math.ceil(S.countT) : 'GO';
-    if(S.countT<=-0.5){S.mode='race'; el.cd.style.opacity=0;}
+    el.cd.textContent = S.countT>0 ? Math.ceil(S.countT) : 'GO';      // 3 · 2 · 1 · GO
+    const fr = S.countT>0 ? (S.countT-Math.floor(S.countT)) : 0;
+    el.cd.style.transform='translate(-50%,-50%) scale('+(1+fr*0.35)+')';  // pop big on appear, settle
+    if(S.countT<=-0.6){S.mode='race'; el.cd.style.opacity=0;}
     return;
   }
   if(S.mode!=='race') return;
