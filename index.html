@@ -88,6 +88,8 @@
     <div class="setrow"><span>Steering Sensitivity</span><input id="sense" type="range" min="0.6" max="1.6" step="0.05" value="1"><span id="senseVal" class="val">1.00</span></div>
     <div class="setrow"><span>Effects Detail</span><div class="seg" id="fxSeg"><button data-v="high" class="on">HIGH</button><button data-v="low">LOW</button></div></div>
     <div class="setrow"><span>Camera Motion</span><label class="tog"><input id="camfx" type="checkbox" checked><span></span></label></div>
+    <div class="setrow"><span>Music</span><input id="musicVol" type="range" min="0" max="1" step="0.05" value="0.5"><span id="musicVal" class="val">50%</span></div>
+    <div class="setrow"><span>Sound FX</span><input id="sfxVol" type="range" min="0" max="1" step="0.05" value="0.75"><span id="sfxVal" class="val">75%</span></div>
     <button id="backBtn" class="ghost backBtn">◂ BACK</button>
   </div>
 </div>
@@ -140,6 +142,69 @@ const T = {
 
 // player-adjustable settings (wired from the settings menu)
 const settings = { steer:1.0, fx:'high', camFx:true };
+
+// ===================== AUDIO — all synthesized Web Audio, no external files =====================
+const Sound = (()=>{
+  let ctx=null, master, musicG, sfxG, NB, delay, delayFb;
+  let eng=null, driftN=null, currN=null, amb=null, musicTimer=null;
+  const vol={music:0.5, sfx:0.75};
+  function mkNoise(){ const b=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate),d=b.getChannelData(0); for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1; return b; }
+  function noiseSrc(){ const s=ctx.createBufferSource(); s.buffer=NB; s.loop=true; return s; }
+  function tone(freq,dur,type,gv,dest){ if(!ctx)return; const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;
+    o.type=type||'sine'; o.frequency.value=freq; g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(gv,t+0.012); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g); g.connect(dest||sfxG); o.start(t); o.stop(t+dur+0.03); }
+  function init(){
+    if(ctx) return;
+    try{ ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; }
+    if(ctx.state==='suspended') ctx.resume();
+    master=ctx.createGain(); master.gain.value=0.9; master.connect(ctx.destination);
+    musicG=ctx.createGain(); musicG.gain.value=vol.music; musicG.connect(master);
+    sfxG=ctx.createGain(); sfxG.gain.value=vol.sfx; sfxG.connect(master);
+    delay=ctx.createDelay(); delay.delayTime.value=0.28; delayFb=ctx.createGain(); delayFb.gain.value=0.34;
+    delay.connect(delayFb); delayFb.connect(delay); delay.connect(musicG);       // underwater echo send
+    NB=mkNoise();
+    // engine drone (2 detuned saws -> lowpass, tracks speed)
+    const o1=ctx.createOscillator(),o2=ctx.createOscillator(),flt=ctx.createBiquadFilter(),eg=ctx.createGain();
+    o1.type='sawtooth';o2.type='sawtooth';o1.frequency.value=48;o2.frequency.value=48.7;flt.type='lowpass';flt.frequency.value=300;eg.gain.value=0;
+    o1.connect(flt);o2.connect(flt);flt.connect(eg);eg.connect(sfxG);o1.start();o2.start(); eng={o1,o2,flt,g:eg};
+    // ambient watery hiss (always on, quiet)
+    const an=noiseSrc(),af=ctx.createBiquadFilter(),ag=ctx.createGain(); af.type='lowpass';af.frequency.value=400;ag.gain.value=0.03; an.connect(af);af.connect(ag);ag.connect(master);an.start(); amb={g:ag};
+    // drift hiss + current rush (gains driven each frame)
+    const dn=noiseSrc(),df=ctx.createBiquadFilter(),dg=ctx.createGain(); df.type='bandpass';df.frequency.value=1500;df.Q.value=0.8;dg.gain.value=0; dn.connect(df);df.connect(dg);dg.connect(sfxG);dn.start(); driftN={g:dg};
+    const cn=noiseSrc(),cf=ctx.createBiquadFilter(),cg=ctx.createGain(); cf.type='lowpass';cf.frequency.value=650;cg.gain.value=0; cn.connect(cf);cf.connect(cg);cg.connect(sfxG);cn.start(); currN={g:cg};
+    startMusic();
+  }
+  function setSpeed(sp){ if(!eng)return; const t=ctx.currentTime,f=44+sp*0.55;
+    eng.o1.frequency.setTargetAtTime(f,t,0.12); eng.o2.frequency.setTargetAtTime(f*1.013,t,0.12);
+    eng.flt.frequency.setTargetAtTime(260+sp*9,t,0.12); eng.g.gain.setTargetAtTime(sp<2?0:Math.min(0.085,0.02+sp*0.0016),t,0.12); }
+  function setDrift(a){ if(driftN)driftN.g.gain.setTargetAtTime(Math.min(0.055,a*0.055),ctx.currentTime,0.05); }
+  function setCurrent(on){ if(currN)currN.g.gain.setTargetAtTime(on?0.05:0,ctx.currentTime,0.12); }
+  function boost(){ if(!ctx)return; const n=noiseSrc(),f=ctx.createBiquadFilter(),g=ctx.createGain(),t=ctx.currentTime;
+    f.type='bandpass';f.Q.value=1;f.frequency.setValueAtTime(380,t);f.frequency.exponentialRampToValueAtTime(3200,t+0.45);
+    g.gain.setValueAtTime(0.0001,t);g.gain.linearRampToValueAtTime(0.11,t+0.05);g.gain.exponentialRampToValueAtTime(0.0001,t+0.5);
+    n.connect(f);f.connect(g);g.connect(sfxG);n.start(t);n.stop(t+0.55); tone(160,0.4,'sine',0.07); }
+  function thud(imp){ if(!ctx)return; tone(66,0.26,'sine',Math.min(0.17,0.05+imp*0.14));
+    const n=noiseSrc(),f=ctx.createBiquadFilter(),g=ctx.createGain(),t=ctx.currentTime; f.type='lowpass';f.frequency.value=480;
+    g.gain.setValueAtTime(Math.min(0.11,imp*0.11),t);g.gain.exponentialRampToValueAtTime(0.0001,t+0.18); n.connect(f);f.connect(g);g.connect(sfxG);n.start(t);n.stop(t+0.2); }
+  function beep(hi){ tone(hi?720:432,0.16,'square',0.08); }
+  function lap(){ [523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,0.55,'sine',0.08,delay),i*110)); }
+  function ready(){ tone(880,0.12,'triangle',0.05); }
+  function death(){ if(!ctx)return; const o=ctx.createOscillator(),f=ctx.createBiquadFilter(),g=ctx.createGain(),t=ctx.currentTime;
+    o.type='sawtooth';o.frequency.setValueAtTime(300,t);o.frequency.exponentialRampToValueAtTime(48,t+1.1);f.type='lowpass';f.frequency.value=640;
+    g.gain.setValueAtTime(0.11,t);g.gain.exponentialRampToValueAtTime(0.0001,t+1.2); o.connect(f);f.connect(g);g.connect(sfxG);o.start(t);o.stop(t+1.25); }
+  const CHORDS=[[220,261.6,329.6],[196,246.9,293.7],[174.6,220,261.6],[164.8,207.7,246.9]];  // Am-ish underwater pads
+  let ci=0;
+  function padChord(fr){ if(!ctx)return; const t=ctx.currentTime;
+    fr.forEach(f=>{ const o=ctx.createOscillator(),o2=ctx.createOscillator(),ff=ctx.createBiquadFilter(),g=ctx.createGain();
+      o.type='triangle';o2.type='sawtooth';o.frequency.value=f;o2.frequency.value=f*1.006;ff.type='lowpass';ff.frequency.value=680;
+      g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(0.028,t+1.2);g.gain.linearRampToValueAtTime(0.028,t+3);g.gain.linearRampToValueAtTime(0.0001,t+4.2);
+      o.connect(ff);o2.connect(ff);ff.connect(g);g.connect(musicG);o.start(t);o2.start(t);o.stop(t+4.3);o2.stop(t+4.3); });
+    const b=ctx.createOscillator(),bg=ctx.createGain(); b.type='sine';b.frequency.value=fr[0]/2; bg.gain.setValueAtTime(0,t);bg.gain.linearRampToValueAtTime(0.055,t+0.8);bg.gain.linearRampToValueAtTime(0.0001,t+4); b.connect(bg);bg.connect(musicG);b.start(t);b.stop(t+4.1);
+    if(Math.random()<0.6) setTimeout(()=>tone(fr[2]*2,0.6,'sine',0.045,delay),1500); }
+  function startMusic(){ if(musicTimer)return; padChord(CHORDS[0]); ci=1; musicTimer=setInterval(()=>{ padChord(CHORDS[ci%CHORDS.length]); ci++; },4000); }
+  function setVol(k,v){ vol[k]=v; if(!ctx)return; if(k==='music')musicG.gain.value=v; else sfxG.gain.value=v; }
+  return { init, setSpeed, setDrift, setCurrent, boost, thud, beep, lap, ready, death, setVol };
+})();
 
 const HALF = 31;       // wider paths (was 24) -> less wall-bumping
 const N = 720;
@@ -680,6 +745,7 @@ const S = {
   countT:0, drift:0, driftSigned:0, driftShow:0, wheelSpin:0, steerVis:0,
   dead:false, deadT:0, vy:0, y:0, recoverT:0, fade:0, safeIdx:0, spinDead:0,
   meter:0, wasDrift:false, boostT:0, boostPow:0, boostFlash:0,
+  wallHitImp:0, inCurrent:false,
 };
 function reset(){
   S.x=pts[0].x; S.z=pts[0].z; S.heading=Math.atan2(tan[0].x,tan[0].z);
@@ -688,7 +754,7 @@ function reset(){
   S.dead=false; S.deadT=0; S.vy=0; S.y=0; S.recoverT=0; S.fade=0; S.safeIdx=0; S.spinDead=0;
   S.meter=0; S.wasDrift=false; S.boostT=0; S.boostPow=0; S.boostFlash=0;
 }
-function die(){ if(S.dead) return; S.dead=true; S.deadT=1.5; S.vy=-4; S.spinDead=0; if(el.msg) el.msg.style.opacity=1; }
+function die(){ if(S.dead) return; S.dead=true; S.deadT=1.5; S.vy=-4; S.spinDead=0; if(el.msg) el.msg.style.opacity=1; Sound.death(); }
 function respawn(){
   const i=(S.safeIdx|0);
   S.x=pts[i].x; S.z=pts[i].z; S.heading=Math.atan2(tan[i].x,tan[i].z);
@@ -730,6 +796,7 @@ function fmt(t){const m=Math.floor(t/60),s=(t%60);return m+':'+s.toFixed(2).padS
 // ---- start / countdown ----
 function beginDive(){
   el.ov.classList.add('hidden'); el.hud.classList.remove('hidden');
+  Sound.init();                                 // create AudioContext inside the click gesture
   reset(); S.mode='count'; S.countT=2.99;      // 3·2·1·GO
   try{window.focus();canvas.focus();}catch(e){}
 }
@@ -746,6 +813,10 @@ document.querySelectorAll('#fxSeg button').forEach(b=>b.onclick=()=>{
   settings.fx=b.dataset.v; document.querySelectorAll('#fxSeg button').forEach(x=>x.classList.toggle('on',x===b)); applyFx();
 });
 document.getElementById('camfx').onchange=e=>{settings.camFx=e.target.checked;};
+const musicVol=document.getElementById('musicVol'),musicVal=document.getElementById('musicVal');
+musicVol.oninput=()=>{Sound.setVol('music',+musicVol.value);musicVal.textContent=Math.round(musicVol.value*100)+'%';};
+const sfxVol=document.getElementById('sfxVol'),sfxVal=document.getElementById('sfxVal');
+sfxVol.oninput=()=>{Sound.setVol('sfx',+sfxVol.value);sfxVal.textContent=Math.round(sfxVol.value*100)+'%';};
 function applyFx(){ const low=settings.fx==='low'; rays.visible=!low; snow.visible=!low; }
 
 // ---- physics ----
@@ -802,7 +873,7 @@ function step(dt){
     if(S.meter>=T.meterMin){                              // cash the charge into a boost
       S.boostPow=S.meter; S.boostT=T.boostDur*(0.55+0.75*S.meter);
       S.vx+=fx*T.boostKick*S.meter; S.vz+=fz*T.boostKick*S.meter;  // instant pop
-      S.boostFlash=1;
+      S.boostFlash=1; Sound.boost();
     }
     S.meter=0;
   } else {
@@ -842,6 +913,7 @@ function step(dt){
       S.vx-=n.x*vn*(1+T.wallBounce); S.vz-=n.z*vn*(1+T.wallBounce);
       const imp=Math.min(1,Math.abs(vn)/40);
       S.vx*=1-(1-T.wallScrub)*imp; S.vz*=1-(1-T.wallScrub)*imp;
+      if(imp>0.15) S.wallHitImp=Math.max(S.wallHitImp,imp);   // -> thud in present()
     }
   }
   // remember the last fully-safe spot (well inside the road, clear of any pit span) for respawn
@@ -849,6 +921,7 @@ function step(dt){
 
   // --- current streams push the sub ---
   const cur=currentAt(frac);
+  S.inCurrent = !!cur;
   if(cur){
     if(cur.type==='boost'){ S.vx+=tan[i].x*cur.force*dt; S.vz+=tan[i].z*cur.force*dt; }
     else { S.vx+=n.x*(cur.dir||1)*cur.force*dt; S.vz+=n.z*(cur.dir||1)*cur.force*dt; }
@@ -859,7 +932,7 @@ function step(dt){
   if(frac>0.4 && frac<0.6) S.checkpoint=true;
   if(S.checkpoint && i<6){
     if(!S.started){ S.started=true; S.lapT=0; }
-    else { if(!S.bestT||S.lapT<S.bestT) S.bestT=S.lapT; S.lap++; S.lapT=0; }
+    else { if(!S.bestT||S.lapT<S.bestT) S.bestT=S.lapT; S.lap++; S.lapT=0; Sound.lap(); }
     S.checkpoint=false;
   }
 
@@ -901,6 +974,7 @@ function atmosphere(dt){
 }
 
 // ---- render sub + HUD ----
+let lastCd=null;   // last countdown value shown (for one beep per number)
 function present(){
   const bob=Math.sin(atmoT*1.3)*0.14;                       // buoyant rise/fall
   sub.position.set(S.x,T.ride+bob+(S.y||0),S.z);
@@ -918,7 +992,16 @@ function present(){
   steerWheels.forEach(pv=>pv.rotation.y=S.steerVis);
   allWheels.forEach(w=>w.rotation.x=S.wheelSpin);
 
-  el.speed.textContent=Math.round(Math.hypot(S.vx,S.vz)*1.9);
+  const spd=Math.hypot(S.vx,S.vz);
+  // --- audio: engine tracks speed, drift hiss, current rush, countdown beeps, wall thud ---
+  Sound.setSpeed(S.mode==='race'&&!S.dead?spd:0);
+  Sound.setDrift(S.mode==='race'&&!S.dead?(S.driftShow||0):0);
+  Sound.setCurrent(S.mode==='race'&&!S.dead&&S.inCurrent);
+  if(S.mode==='count'){ const n=S.countT>0?Math.ceil(S.countT):'GO'; if(n!==lastCd){ lastCd=n; if(n==='GO')Sound.beep(true); else if(typeof n==='number'&&n<=3)Sound.beep(false); } }
+  else lastCd=null;
+  if(S.wallHitImp>0){ Sound.thud(S.wallHitImp); S.wallHitImp=0; }
+
+  el.speed.textContent=Math.round(spd*1.9);
   el.laps.textContent=S.started?fmt(S.lapT):'0:00.00';
   el.sub.textContent=`LAP ${S.lap} · BEST ${S.bestT?fmt(S.bestT):'--:--'}`;
   el.meterfill.style.width=(S.meter*100)+'%';
