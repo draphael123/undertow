@@ -950,7 +950,7 @@ function updateOpps(dt){
     op.g.rotation.z=hd*0.35+Math.sin(atmoT*0.6+op._ph)*0.04;
     const dx2=S.x-op.g.position.x, dz2=S.z-op.g.position.z, d=Math.hypot(dx2,dz2);
     if(d<6 && !S.dead){ const push=(6-d)*0.5, nx=dx2/(d||1), nz=dz2/(d||1); S.x+=nx*push; S.z+=nz*push; S.vx*=0.94; S.vz*=0.94; S.wallHitImp=Math.max(S.wallHitImp||0,0.3); }
-    const opProg=(op.lap-1)+op.prog, behind=normGap(opProg, pProg)>0;
+    opProg=(op.lap-1)+op.prog; const behind=normGap(opProg, pProg)>0;
     if(op.wasBehind && !behind) op.overtakeFlash=0.85;
     op.wasBehind=behind;
     if(op.overtakeFlash>0) op.overtakeFlash-=dt*2.2;
